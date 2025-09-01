@@ -1,3 +1,27 @@
+# --- robust path & import diagnostics (plak bovenaan) ---
+import os, sys, traceback
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+# Log de zichtbare paden/bestanden naar de Streamlit logs
+try:
+    import streamlit as st
+    st.write("sys.path[0:3] →", sys.path[:3])
+    st.write("root files →", os.listdir(ROOT))
+    if os.path.isdir(os.path.join(ROOT, "utils")):
+        st.write("utils files →", os.listdir(os.path.join(ROOT, "utils")))
+except Exception:
+    pass
+
+# Probeer import en toon volledige traceback als het misgaat
+try:
+    from utils.shared import *
+except Exception:
+    import streamlit as st
+    st.error("Kon `utils.shared` niet importeren. Zie traceback hieronder:")
+    st.code("".join(traceback.format_exc()))
+    st.stop()
 # pages/01_Calculatie.py
 import os, sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
