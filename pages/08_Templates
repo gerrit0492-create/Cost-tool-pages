@@ -1,0 +1,60 @@
+# pages/08_Templates.py
+import os, sys
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT not in sys.path: sys.path.insert(0, ROOT)
+
+import streamlit as st, pandas as pd
+
+st.set_page_config(page_title="Templates", page_icon="📚", layout="wide")
+st.title("📚 Templates (Routing & BOM)")
+
+def tpl_plaatwerk_kast():
+    r = pd.DataFrame([
+        {"Step":10,"Proces":"Laser","Qty_per_parent":1,"Cycle_min":1.2,"Setup_min":15,"Attend_pct":60,"kWh_pc":0.05,"QA_min_pc":0.1,"Scrap_pct":0.03,"Parallel_machines":1,"Batch_size":50,"Queue_days":0.2},
+        {"Step":20,"Proces":"Buigen","Qty_per_parent":1,"Cycle_min":2.5,"Setup_min":10,"Attend_pct":80,"kWh_pc":0.02,"QA_min_pc":0.1,"Scrap_pct":0.02,"Parallel_machines":1,"Batch_size":50,"Queue_days":0.2},
+        {"Step":30,"Proces":"Lassen","Qty_per_parent":1,"Cycle_min":6.0,"Setup_min":10,"Attend_pct":100,"kWh_pc":0.15,"QA_min_pc":0.3,"Scrap_pct":0.02,"Parallel_machines":1,"Batch_size":20,"Queue_days":0.3},
+        {"Step":40,"Proces":"Montage","Qty_per_parent":1,"Cycle_min":4.0,"Setup_min":5,"Attend_pct":100,"kWh_pc":0.00,"QA_min_pc":0.2,"Scrap_pct":0.01,"Parallel_machines":1,"Batch_size":20,"Queue_days":0.1},
+    ])
+    b = pd.DataFrame([{"Part":"Scharnier","Qty":2,"UnitPrice":1.2,"Scrap_pct":0.02},
+                      {"Part":"Slot","Qty":1,"UnitPrice":3.5,"Scrap_pct":0.02}])
+    return r,b
+
+def tpl_gedraaide_as():
+    r = pd.DataFrame([
+        {"Step":10,"Proces":"CNC","Qty_per_parent":1,"Cycle_min":5.0,"Setup_min":20,"Attend_pct":80,"kWh_pc":0.18,"QA_min_pc":0.3,"Scrap_pct":0.02,"Parallel_machines":1,"Batch_size":40,"Queue_days":0.2},
+        {"Step":20,"Proces":"Montage","Qty_per_parent":1,"Cycle_min":2.0,"Setup_min":5,"Attend_pct":100,"kWh_pc":0.00,"QA_min_pc":0.1,"Scrap_pct":0.01,"Parallel_machines":1,"Batch_size":40,"Queue_days":0.1},
+    ])
+    b = pd.DataFrame([{"Part":"Lager","Qty":2,"UnitPrice":4.2,"Scrap_pct":0.01}])
+    return r,b
+
+def tpl_lasconstructie():
+    r = pd.DataFrame([
+        {"Step":10,"Proces":"Laser","Qty_per_parent":1,"Cycle_min":1.5,"Setup_min":12,"Attend_pct":60,"kWh_pc":0.06,"QA_min_pc":0.1,"Scrap_pct":0.03,"Parallel_machines":1,"Batch_size":60,"Queue_days":0.2},
+        {"Step":20,"Proces":"Lassen","Qty_per_parent":1,"Cycle_min":10.0,"Setup_min":15,"Attend_pct":100,"kWh_pc":0.25,"QA_min_pc":0.4,"Scrap_pct":0.03,"Parallel_machines":1,"Batch_size":30,"Queue_days":0.3},
+    ])
+    b = pd.DataFrame([{"Part":"Lasdraad","Qty":0.1,"UnitPrice":12.0,"Scrap_pct":0.05}])
+    return r,b
+
+def tpl_gietstuk():
+    r = pd.DataFrame([
+        {"Step":10,"Proces":"Casting","Qty_per_parent":1,"Cycle_min":3.0,"Setup_min":30,"Attend_pct":40,"kWh_pc":0.50,"QA_min_pc":0.2,"Scrap_pct":0.05,"Parallel_machines":2,"Batch_size":80,"Queue_days":0.5},
+        {"Step":20,"Proces":"CNC","Qty_per_parent":1,"Cycle_min":4.0,"Setup_min":10,"Attend_pct":80,"kWh_pc":0.20,"QA_min_pc":0.2,"Scrap_pct":0.02,"Parallel_machines":1,"Batch_size":60,"Queue_days":0.2},
+    ])
+    b = pd.DataFrame([{"Part":"Model/plaat","Qty":1,"UnitPrice":150.0,"Scrap_pct":0.00}])
+    return r,b
+
+tpls = {
+    "Plaatwerk kast": tpl_plaatwerk_kast,
+    "Gedraaide as": tpl_gedraaide_as,
+    "Lasconstructie": tpl_lasconstructie,
+    "Gietstuk": tpl_gietstuk
+}
+
+choice = st.selectbox("Kies template", list(tpls.keys()))
+if st.button("📥 Inladen in sessie"):
+    r,b = tpls[choice]()
+    st.session_state["routing_df"] = r
+    st.session_state["bom_df"] = b
+    st.success(f"Template **{choice}** geladen. Ga naar **01_Calculatie**.")
+    st.dataframe(r, use_container_width=True)
+    st.dataframe(b, use_container_width=True)
