@@ -1,10 +1,27 @@
+# Webapp basis
 streamlit>=1.33
 pandas>=2.0
-numpy>=1.24
-requests>=2.31
+numpy>=1.25
+
+# Grafieken
+plotly>=5.20
+matplotlib>=3.8
+
+# PDF generatie
+reportlab>=3.6.13
+
+# Web scraping
 beautifulsoup4>=4.12
+requests>=2.31
 lxml>=4.9
-plotly>=5.19
-kaleido>=0.2
-reportlab>=4.0
+
+# Excel en bestandsformaten
+openpyxl>=3.1
 xlsxwriter>=3.1
+
+# Data analyse en export
+pyarrow>=14.0
+altair>=5.0
+
+# Utilities
+python-dateutil>=2.9
