@@ -15,6 +15,29 @@ import os, sys, traceback
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+import streamlit as st
+from pathlib import Path
+import sys, os
+
+# === Debug-schakelaar ===
+# aan via URL: ?debug=1   of via secrets: DEBUG=true
+qp = st.query_params
+DEBUG = ("debug" in qp and qp["debug"] in ("1","true","True")) or bool(st.secrets.get("DEBUG", False))
+
+def show_debug():
+    st.subheader("🔧 Debug")
+    st.code(f"sys.path[0:3] →\n{sys.path[0:3]!r}")
+    root = Path(__file__).resolve().parent.parent  # repo-root
+    st.code("root files →\n" + str(sorted([p.name for p in root.iterdir()])))
+    utils_dir = root / "utils"
+    if utils_dir.exists():
+        st.code("utils files →\n" + str(sorted([p.name for p in utils_dir.iterdir()])))
+
+# ---- jouw normale UI hieronder ----
+st.title("🔧 Calculatie")
+
+if DEBUG:
+    show_debug()  # alleen zichtbaar als debug aan staat
 
 # Log de zichtbare paden/bestanden naar de Streamlit logs
 try:
