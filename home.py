@@ -1,4 +1,7 @@
 import streamlit as st
+
+st.write("✅ App is gestart")
+import streamlit as st
 st.set_page_config(page_title="Maakindustrie Cost Tool", page_icon="🧮", layout="wide")
 
 st.title("🧮 Maakindustrie Cost Tool")
