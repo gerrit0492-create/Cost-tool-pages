@@ -14,3 +14,4 @@ xlsxwriter==3.2.5
 
 # PDF (voor rapporten later)
 reportlab==4.4.3
+python-docx
