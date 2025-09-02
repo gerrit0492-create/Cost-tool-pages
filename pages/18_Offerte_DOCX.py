@@ -1,7 +1,6 @@
-# pages/18_Offerte_DOCX.py  (vervang hele bestand)
-import os, io, json
+# pages/18_Offerte_DOCX.py  (complete, met fix voor st.dataframe)
+import os, io, json, math
 from datetime import date
-import math
 import pandas as pd
 import streamlit as st
 from docx import Document
@@ -29,7 +28,7 @@ for p in ["data/bom_current.json", "data/material_prices.csv", "data/labor_rates
     if not os.path.exists(p):
         missing.append(p)
 if missing:
-    st.error("Ontbrekend voor DOCX-offerte:\n- " + "\n- ".join(missing))
+    st.error("Ontbrekend voor DOCX-offerte:\n- " + "\n".join(missing))
     st.stop()
 
 # ---- Data laden
@@ -60,8 +59,7 @@ def mass_kg(part):
     elif form in ("bar","staf","round","rod") and d and L:
         vol=math.pi*(float(d)/2)**2*float(L)
     else:
-        # fallback simpel prisma (0 als niets is ingevuld)
-        vol=float(t or 0)*float(L or 0)*float(W or 0)
+        vol=float(t or 0)*float(L or 0)*float(W or 0)  # fallback
     return max(0.0, vol)*rho
 
 def latest_material_price(df, grade, region="EU", unit="€/kg"):
@@ -91,7 +89,6 @@ def midpoint_rate(df, process_kw, country="Netherlands"):
 def map_rate_for_process(df_rates, proc_name:str):
     """Slimmere mapping: direct proces als het bestaat, anders beste alternatief."""
     p=proc_name.strip().lower()
-    # directe hits
     direct_map = {
         "laser": ["laser","lasersnijden"],
         "bend": ["bend","buigen","kantbank","press brake"],
@@ -101,12 +98,10 @@ def map_rate_for_process(df_rates, proc_name:str):
     }
     for key, kws in direct_map.items():
         if p==key or any(p==k or p in k for k in kws):
-            # probeer exact keyword eerst
             for kw in [p] + kws:
                 rate = midpoint_rate(df_rates, kw)
-                if rate>0.02:  # arbitraire ondergrens
+                if rate>0.02:
                     return rate
-    # back-ups
     if "laser" in p:   return midpoint_rate(df_rates, "cnc milling")
     if "bend" in p:    return midpoint_rate(df_rates, "cnc milling")
     if "tig" in p:     return midpoint_rate(df_rates, "tig")
@@ -133,9 +128,7 @@ for p in items:
     procs=[x.strip() for x in (p.get("processes") or [])]
     proc_detail=[]; proc_cost_pc=0.0
     for proc in procs:
-        # normaliseer proc key
         norm = proc.upper() if proc.upper()=="TIG" else proc.lower()
-        # map tarief
         rate = map_rate_for_process(df_rates, norm)
         minutes=est_minutes(p, "TIG" if norm=="TIG" else norm)
         cost_pc=minutes*rate
@@ -157,6 +150,8 @@ for p in items:
     })
 
 df=pd.DataFrame(rows)
+
+# ---- Samenvatting & tabel in de app (zonder complexe proc_detail kolom)
 total_excl = float((df["tot_pc"] * df["qty"]).sum()) if not df.empty else 0.0
 total_incl = total_excl * (1 + vat_pct/100.0)
 
@@ -165,7 +160,21 @@ c1,c2,c3=st.columns(3)
 c1.metric("Totaal excl. btw", f"€ {total_excl:,.2f}")
 c2.metric("BTW", f"{vat_pct}%")
 c3.metric("Totaal incl. btw", f"€ {total_incl:,.2f}")
-st.dataframe(df, use_container_width=True)
+
+cols = ["item","qty","grade","family","mass","eur_kg","mat_pc","proc_pc","tot_pc"]
+df_display = df[cols].copy()
+for c in ["qty","mass","eur_kg","mat_pc","proc_pc","tot_pc"]:
+    df_display[c] = pd.to_numeric(df_display[c], errors="coerce")
+
+st.dataframe(df_display, use_container_width=True)
+
+# Download schone CSV (zonder proc_detail)
+st.download_button(
+    "⬇️ Download resultaten.csv",
+    df_display.to_csv(index=False),
+    "offerte_resultaten.csv",
+    "text/csv"
+)
 
 # ---- DOCX opbouwen
 doc=Document()
@@ -174,9 +183,10 @@ doc=Document()
 sec = doc.sections[0]
 header = sec.header.paragraphs[0]
 if logo_file:
-    pic = header.add_run().add_picture(logo_file, width=Inches(1.2))
+    run = header.add_run()
+    run.add_picture(logo_file, width=Inches(1.2))
     header.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    header.add_run("  ")  # klein beetje ruimte
+    header.add_run("  ")
 else:
     header.add_run("")
 
@@ -231,22 +241,18 @@ doc.add_paragraph("Weld quality: EN ISO 5817 level C.")
 doc.add_paragraph("Scrap: 3%.")
 doc.add_paragraph("Prices excl. VAT.")
 
-# Footer met paginanummer (simpel tekst)
+# Footer (eenvoudige tekst)
 footer = doc.sections[0].footer.paragraphs[0]
 footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-footer.add_run("— Page ").bold = False
-footer.add_run("1").bold = False  # NB: python-docx heeft geen auto page field; we laten '1' staan als placeholder.
+footer.add_run("— Page 1 —")
 
-# ---- Download knoppen
+# ---- Download knoppen (DOCX)
 buf=io.BytesIO(); doc.save(buf); buf.seek(0)
-st.download_button("⬇️ Download offerte.docx", data=buf,
-                   file_name=f"offerte_{project_code}.docx",
-                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
-# Extra: CSV-export
-df_export = pd.DataFrame(rows)
-st.download_button("⬇️ Download resultaten.csv",
-                   df_export.to_csv(index=False),
-                   "offerte_resultaten.csv", "text/csv")
+st.download_button(
+    "⬇️ Download offerte.docx",
+    data=buf,
+    file_name=f"offerte_{project_code}.docx",
+    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
 
 st.caption("Tip: voeg in data/labor_rates.csv een rij met process='laser' toe voor exact laser-tarief; anders valt hij terug op CNC milling.")
