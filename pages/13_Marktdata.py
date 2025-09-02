@@ -20,7 +20,7 @@ do_save    = col_b.button("💾 Opslaan naar CSV")
 do_clear   = col_c.button("🧹 Leeg velden")
 
 if do_clear:
-    st.experimental_rerun()
+    st.rerun()
 
 # Uitvoer-paden
 
