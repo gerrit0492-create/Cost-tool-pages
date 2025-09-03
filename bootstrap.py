@@ -1,19 +1,12 @@
-# bootstrap.py (in repo-root)
-from __future__ import annotations
-import sys
-from pathlib import Path
+# bootstrap.py
+import streamlit as st
 
-ROOT = Path(__file__).resolve().parent
+def configure_page():
+    st.set_page_config(page_title="Maakindustrie Cost Tool", page_icon="📦", layout="wide")
 
-# Zet repo-root helemaal vooraan, vóór site-packages:
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-# Beetje sanity: voorkom schaduwing door een verdwaalde 'utils.py' etc.
-for shady in ("utils.py", "shared.py"):
-    p = ROOT / shady
-    if p.exists():
-        raise RuntimeError(
-            f"Bestand {shady} in repo-root schaduwt je package-map. "
-            f"Verwijder/hernoem {p}."
-        )
+def init_state():
+    ss = st.session_state
+    ss.setdefault("bom", None)              # pandas.DataFrame
+    ss.setdefault("materials", None)        # pandas.DataFrame
+    ss.setdefault("processes", None)        # pandas.DataFrame (optioneel)
+    ss.setdefault("price_overrides", {})    # {material_id: {eur_per_kg, source, date}}
