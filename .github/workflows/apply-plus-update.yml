@@ -1,10 +1,22 @@
-name: Apply ULTIMATE+ Update
-on: { workflow_dispatch: {} }
-permissions: { contents: write, pull-requests: write }
+name: Apply ULTIMATE Plus Update
+
+on:
+  # handmatig starten blijft mogelijk
+  workflow_dispatch:
+  # auto-start bij elke push naar main
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
   apply:
+    # voorkom eindeloze loops door eigen bot-commits
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +45,9 @@ def part_cost(material_kg: float, price_eur_per_kg: float,
               process_time_h: float, machine_rate_eur_h: float,
               labor_time_h: float, labor_rate_eur_h: float) -> float:
     return (material_kg * price_eur_per_kg) + (process_time_h * machine_rate_eur_h) + (labor_time_h * labor_rate_eur_h)
+
+def apply_scenario(rate: float, multiplier: float) -> float:
+    return rate * multiplier
 PY
 
           # --- pages/15_BOM_Calculatie_PLUS.py ---
@@ -44,7 +59,7 @@ from utils.costing import part_cost
 import streamlit as st, pandas as pd
 
 configure_page(); init_state()
-st.title("📦 BOM Calculatie — PLUS")
+st.title("BOM Calculatie — PLUS")
 
 P = paths()
 materials = run_safely("Load materials", read_csv_safe, P["materials"], SCHEMA_MATERIALS)
@@ -88,7 +103,7 @@ from utils.costing import machine_cost_per_hour, labor_cost_per_hour
 import streamlit as st
 
 configure_page(); init_state()
-st.title("⚙️ Routing Kosten — PLUS")
+st.title("Routing Kosten — PLUS")
 
 p = paths()["processes"]
 df = run_safely("Load processes", read_csv_safe, p, SCHEMA_PROCESSES)
@@ -124,7 +139,7 @@ from utils.io import read_csv_safe, SCHEMA_PROCESSES, paths
 import streamlit as st, pandas as pd
 
 configure_page(); init_state()
-st.title("🧪 Scenario Planner — PLUS")
+st.title("Scenario Planner — PLUS")
 
 df = run_safely("Load processes", read_csv_safe, paths()["processes"], SCHEMA_PROCESSES)
 if df is None: st.stop()
@@ -145,33 +160,6 @@ if "machine_rate_eur_h" in out.columns and "machine_rate_eur_h_scn" in out.colum
     out["Δ machine %"] = delta_pct(out["machine_rate_eur_h_scn"], out["machine_rate_eur_h"]).round(1)
 if "labor_rate_eur_h" in out.columns and "labor_rate_eur_h_scn" in out.columns:
     out["Δ labor %"] = delta_pct(out["labor_rate_eur_h_scn"], out["labor_rate_eur_h"]).round(1)
-PY
-
-          # --- pages/09_Dashboard_PLUS.py ---
-          cat > pages/09_Dashboard_PLUS.py <<'PY'
-from bootstrap import configure_page, init_state
-from utils.safe import run_safely
-from utils.io import read_csv_safe, SCHEMA_MATERIALS, SCHEMA_BOM, paths
-from utils.costing import part_cost
-import streamlit as st, pandas as pd
-
-configure_page(); init_state()
-st.title("📊 Dashboard — PLUS")
-
-P = paths()
-m = run_safely("Load materials", read_csv_safe, P["materials"], SCHEMA_MATERIALS)
-b = run_safely("Load BOM", read_csv_safe, P["bom"], SCHEMA_BOM) if P["bom"].exists() else None
-if m is None or b is None: st.info("Zorg dat materials_db.csv en bom_template.csv aanwezig zijn."); st.stop()
-
-v = b.merge(m[["material_id","price_eur_per_kg"]], on="material_id", how="left")
-lt_per_qty, mt_per_qty, lrate, mrate = 0.1, 0.05, 45.0, 80.0
-def calc_row(r):
-    mk, qty, price = (r.get("mass_kg") or 0.0), (r.get("qty") or 0.0), (r.get("price_eur_per_kg") or 0.0)
-    lt, mt = qty*lt_per_qty, qty*mt_per_qty
-    return part_cost(mk, price, mt, mrate, lt, lrate)
-v["part_cost_eur"] = v.apply(calc_row, axis=1)
-tot = v["part_cost_eur"].sum()
-st.metric("Totaal", f"€ {tot:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
 PY
 
           # --- helper script voor builds (hergebruikt door 3 workflows) ---
@@ -222,47 +210,64 @@ PY
           cat > .github/workflows/build-plus.yml <<'YML'
 name: Build PLUS Artifacts
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   push:
-    paths: [ "data/**", "overrides/**", "utils/**", "pages/**" ]
+    paths:
+      - "data/**"
+      - "overrides/**"
+      - "utils/**"
+      - "pages/**"
 jobs:
   build-plus:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with:
+          python-version: '3.11'
       - run: python -m pip install -U pip pandas openpyxl
       - run: python .github/workflows/scripts/build_plus_artifacts.py
       - uses: actions/upload-artifact@v4
-        with: { name: cost-tool-plus, path: dist/*, retention-days: 14 }
+        with:
+          name: cost-tool-plus
+          path: dist/*
+          retention-days: 14
 YML
 
           cat > .github/workflows/release-plus.yml <<'YML'
 name: Release PLUS
 on:
-  push: { tags: [ "v*.*.*" ] }
-  workflow_dispatch: {}
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with:
+          python-version: '3.11'
       - run: python -m pip install -U pip pandas openpyxl
       - run: python .github/workflows/scripts/build_plus_artifacts.py
       - uses: actions/upload-artifact@v4
-        with: { name: cost-tool-plus-${{ github.ref_name }}, path: dist/*, retention-days: 30 }
+        with:
+          name: cost-tool-plus-${{ github.ref_name }}
+          path: dist/*
+          retention-days: 30
   release:
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { name: cost-tool-plus-${{ github.ref_name }}, path: dist }
+        with:
+          name: cost-tool-plus-${{ github.ref_name }}
+          path: dist
       - uses: softprops/action-gh-release@v2
-        with: { files: dist/* }
+        with:
+          files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 YML
@@ -270,26 +275,31 @@ YML
           cat > .github/workflows/schedule-nightly.yml <<'YML'
 name: Nightly PLUS Build
 on:
-  schedule: [ { cron: "15 2 * * *" } ]
-  workflow_dispatch: {}
+  schedule:
+    - cron: "15 2 * * *"
+  workflow_dispatch:
 jobs:
   nightly-plus:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with:
+          python-version: '3.11'
       - run: python -m pip install -U pip pandas openpyxl
       - run: python .github/workflows/scripts/build_plus_artifacts.py
       - uses: actions/upload-artifact@v4
-        with: { name: nightly-cost-tool-plus, path: dist/*, retention-days: 7 }
+        with:
+          name: nightly-cost-tool-plus
+          path: dist/*
+          retention-days: 7
 YML
 
-      - name: Open PR
+      - name: Create PR
         uses: peter-evans/create-pull-request@v6
         with:
-          title: "feat: Apply ULTIMATE+ (PLUS pages, costing utils, build/release/nightly)"
+          title: "feat: apply ULTIMATE+ (PLUS pages, costing utils, workflows)"
           branch: "auto/apply-ultimate-plus"
-          commit-message: "feat: add PLUS pages + workflows + costing utils"
+          commit-message: "feat: add PLUS pages + costing utils + build/release/nightly workflows"
           labels: "automation,plus,costing"
           draft: false
