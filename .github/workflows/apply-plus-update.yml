@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   apply:
-    # voorkom eindeloze loops door bot-commits
     if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
 
@@ -23,17 +22,14 @@ jobs:
         run: |
           python - <<'PY'
           import pathlib, textwrap
-
           root = pathlib.Path(".")
           (root / "utils").mkdir(parents=True, exist_ok=True)
           (root / "pages").mkdir(parents=True, exist_ok=True)
-          (root / "tests").mkdir(parents=True, exist_ok=True)
           (root / ".github" / "workflows" / "scripts").mkdir(parents=True, exist_ok=True)
 
           # -------- utils/costing.py --------
           (root / "utils" / "costing.py").write_text(textwrap.dedent("""\
           def machine_cost_per_hour(capex_eur, lifetime_yrs, utilization_pct, maintenance_pct, energy_eur_per_kwh, kwh_per_hour):
-              # Simple model: depreciation + maintenance + energy, corrected for utilization
               hrs_per_year = 2000.0
               depreciation = capex_eur / (lifetime_yrs * hrs_per_year)
               maintenance  = (capex_eur * maintenance_pct) / (lifetime_yrs * hrs_per_year)
@@ -120,7 +116,8 @@ jobs:
               st.stop()
 
           st.subheader("Basis tarieven (CSV)")
-          st.dataframe(df[["process_id","machine_rate_eur_h","labor_rate_eur_h","overhead_pct","margin_pct"]].fillna(""), use_container_width=True)
+          st.dataframe(df[["process_id","machine_rate_eur_h","labor_rate_eur_h","overhead_pct","margin_pct"]].fillna(""),
+                       use_container_width=True)
 
           st.sidebar.header("Machine uurkosten (model)")
           capex = st.sidebar.number_input("CAPEX (EUR)", min_value=0.0, value=120000.0, step=5000.0)
@@ -131,16 +128,14 @@ jobs:
           kwh   = st.sidebar.number_input("Verbruik (kWh/uur)", min_value=0.0, value=8.0, step=0.5)
 
           model_rate = machine_cost_per_hour(capex, life, util, maint, ekwh, kwh)
-          info_txt = f"Model: machine-uurkosten ~ EUR {model_rate:,.2f}".replace(",", "X").replace(".", ",").replace("X",".")
-          st.info(info_txt)
+          st.info(f"Model: machine-uurkosten ~ EUR {model_rate:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
 
           st.sidebar.header("Arbeid")
           hr = st.sidebar.number_input("Bruto uurloon", min_value=0.0, value=40.0, step=1.0)
           oh = st.sidebar.number_input("Overhead %", min_value=0.0, max_value=1.0, value=0.2, step=0.05)
           mg = st.sidebar.number_input("Marge %",   min_value=0.0, max_value=1.0, value=0.1, step=0.05)
           lrate = labor_cost_per_hour(hr, oh, mg)
-          info_txt2 = f"Model: labor-uurkosten ~ EUR {lrate:,.2f}".replace(",", "X").replace(".", ",").replace("X",".")
-          st.info(info_txt2)
+          st.info(f"Model: labor-uurkosten ~ EUR {lrate:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
           """), encoding="utf-8")
 
           # -------- pages/06_ScenarioPlanner_PLUS.py --------
@@ -177,156 +172,30 @@ jobs:
           if "labor_rate_eur_h" in out.columns and "labor_rate_eur_h_scn" in out.columns:
               out["delta_labor_pct"] = delta_pct(out["labor_rate_eur_h_scn"], out["labor_rate_eur_h"]).round(1)
           """), encoding="utf-8")
-
-          # -------- helper build script used by build/release/nightly --------
-          (root / ".github" / "workflows" / "scripts" / "build_plus_artifacts.py").write_text(textwrap.dedent("""\
-          import pandas as pd, pathlib as pl, sys
-          DATA = pl.Path('data'); OUT = pl.Path('dist'); OUT.mkdir(exist_ok=True)
-          OV = DATA / 'overrides'
-          def read(p): return pd.read_csv(p) if p.exists() else pd.DataFrame()
-
-          m = read(DATA/'materials_db.csv')
-          if m.empty:
-              print("ERROR: data/materials_db.csv missing or empty"); sys.exit(1)
-          p = read(DATA/'processes_db.csv')
-          b = read(DATA/'bom_template.csv')
-
-          mpo = read(OV/'material_price_overrides.csv') if OV.exists() else pd.DataFrame()
-          if not mpo.empty and {'material_id','price_eur_per_kg'}.issubset(mpo.columns):
-              for c in ['price_source','source_url','source_date']:
-                  if c not in mpo.columns: mpo[c] = pd.NA
-              m = m.merge(mpo[['material_id','price_eur_per_kg','price_source','source_url','source_date']],
-                          on='material_id', how='left', suffixes=('','__ovr'))
-              for c in ['price_eur_per_kg','price_source','source_url','source_date']:
-                  oc = c+'__ovr'
-                  if oc in m.columns:
-                      m[c] = m[oc].where(pd.notna(m[oc]), m[c])
-              m = m[[c for c in m.columns if not c.endswith('__ovr')]]
-
-          m.to_csv(OUT/'materials_resolved.csv', index=False)
-          if not p.empty: p.to_csv(OUT/'processes_resolved.csv', index=False)
-
-          if not b.empty:
-              view = b.merge(m[['material_id','price_eur_per_kg']], on='material_id', how='left')
-              lt_per_qty, mt_per_qty, lrate, mrate = 0.1, 0.05, 45.0, 80.0
-              def calc_row(r):
-                  mk, qty, price = (r.get('mass_kg') or 0.0), (r.get('qty') or 0.0), (r.get('price_eur_per_kg') or 0.0)
-                  lt, mt = qty*lt_per_qty, qty*mt_per_qty
-                  return (mk*price) + (mt*mrate) + (lt*lrate)
-              view['part_cost_eur'] = view.apply(calc_row, axis=1)
-              view.to_csv(OUT/'bom_calculated_plus.csv', index=False)
-
-          with pd.ExcelWriter(OUT/'plus_bundle.xlsx') as xw:
-              m.to_excel(xw, sheet_name='materials', index=False)
-              if not p.empty: p.to_excel(xw, sheet_name='processes', index=False)
-              if (OUT/'bom_calculated_plus.csv').exists():
-                  pd.read_csv(OUT/'bom_calculated_plus.csv').to_excel(xw, sheet_name='bom_calc', index=False)
-          print("Built PLUS artifacts to ./dist")
-          """), encoding="utf-8")
-
-          # -------- 3 workflows that use the helper script --------
-          (root / ".github" / "workflows" / "build-plus.yml").write_text(textwrap.dedent("""\
-          name: Build PLUS Artifacts
-          on:
-            workflow_dispatch:
-            push:
-              paths:
-                - "data/**"
-                - "overrides/**"
-                - "utils/**"
-                - "pages/**"
-          jobs:
-            build-plus:
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: actions/setup-python@v5
-                  with:
-                    python-version: "3.11"
-                - run: python -m pip install -U pip pandas openpyxl
-                - run: python .github/workflows/scripts/build_plus_artifacts.py
-                - uses: actions/upload-artifact@v4
-                  with:
-                    name: cost-tool-plus
-                    path: dist/*
-                    retention-days: 14
-          """), encoding="utf-8")
-
-          (root / ".github" / "workflows" / "release-plus.yml").write_text(textwrap.dedent("""\
-          name: Release PLUS
-          on:
-            push:
-              tags:
-                - "v*.*.*"
-            workflow_dispatch:
-          jobs:
-            build:
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: actions/setup-python@v5
-                  with:
-                    python-version: "3.11"
-                - run: python -m pip install -U pip pandas openpyxl
-                - run: python .github/workflows/scripts/build_plus_artifacts.py
-                - uses: actions/upload-artifact@v4
-                  with:
-                    name: cost-tool-plus-${{ github.ref_name }}
-                    path: dist/*
-                    retention-days: 30
-            release:
-              needs: build
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: actions/download-artifact@v4
-                  with:
-                    name: cost-tool-plus-${{ github.ref_name }}
-                    path: dist
-                - uses: softprops/action-gh-release@v2
-                  with:
-                    files: dist/*
-                  env:
-                    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          """), encoding="utf-8")
-
-          (root / ".github" / "workflows" / "schedule-nightly.yml").write_text(textwrap.dedent("""\
-          name: Nightly PLUS Build
-          on:
-            schedule:
-              - cron: "15 2 * * *"
-            workflow_dispatch:
-          jobs:
-            nightly-plus:
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: actions/setup-python@v5
-                  with:
-                    python-version: "3.11"
-                - run: python -m pip install -U pip pandas openpyxl
-                - run: python .github/workflows/scripts/build_plus_artifacts.py
-                - uses: actions/upload-artifact@v4
-                  with:
-                    name: nightly-cost-tool-plus
-                    path: dist/*
-                    retention-days: 7
-          """), encoding="utf-8")
           PY
 
-      - name: Show git status (debug)
+      - name: Detect changes
+        id: changes
         run: |
+          # toon status
           git status
-          git diff --stat || true
+          # Detecteer zowel tracked diffs als untracked (nieuwe) files
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            git diff --stat || true
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No changes to commit"
+          fi
 
       - name: Open PR with changes
+        if: steps.changes.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           title: "feat: apply ULTIMATE+ (PLUS pages, costing utils, workflows)"
           branch: "auto/apply-ultimate-plus"
-          branch-suffix: "random"         # voorkom botssingen als de branch al bestaat
+          branch-suffix: "random"      # voorkom botsingen als branch bestaat
           commit-message: "feat: add PLUS pages + costing utils + build scripts"
           labels: "automation,plus,costing"
+          delete-branch: true           # ruim branch op na merge
           draft: false
-          delete-branch: true             # ruim branch op na merge
-          skip-if-no-changes: true        # sla PR over als er niets te veranderen is
