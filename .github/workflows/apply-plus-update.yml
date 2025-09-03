@@ -1,4 +1,4 @@
-name: Apply ULTIMATE Plus (no PR)
+name: Apply ULTIMATE+ (direct)
 
 on:
   workflow_dispatch:
@@ -6,12 +6,20 @@ on:
       mode:
         description: Waar moet de update landen?
         type: choice
-        options: [branch, main, dry-run]
+        options: [main, branch]
         default: branch
       branch:
-        description: Branchnaam (alleen gebruikt bij mode=branch)
+        description: Branchnaam (alleen bij mode=branch)
         required: false
         default: auto/apply-ultimate-plus
+      release:
+        description: Maak tag + GitHub Release met artifacts
+        type: boolean
+        default: false
+      tag:
+        description: Optionele tag (bv. v1.0.0). Leeg = autom. datumtag.
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -22,14 +30,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
-      - name: Write files via Python (ULTIMATE+)
+      - name: Write ULTIMATE+ files (utils/pages/scripts/workflows)
         run: |
           python - <<'PY'
           import pathlib, textwrap
-
           root = pathlib.Path(".")
           (root / "utils").mkdir(parents=True, exist_ok=True)
           (root / "pages").mkdir(parents=True, exist_ok=True)
@@ -169,6 +175,52 @@ jobs:
           if "labor_rate_eur_h" in out.columns and "labor_rate_eur_h_scn" in out.columns:
               out["delta_labor_pct"] = delta_pct(out["labor_rate_eur_h_scn"], out["labor_rate_eur_h"]).round(1)
           """), encoding="utf-8")
+
+          # -------- helper build script (voor artifacts) --------
+          (root / ".github" / "workflows" / "scripts" / "build_plus_artifacts.py").write_text(textwrap.dedent("""\
+          import pandas as pd, pathlib as pl, sys
+          DATA = pl.Path('data'); OUT = pl.Path('dist'); OUT.mkdir(exist_ok=True)
+          OV = DATA / 'overrides'
+          def read(p): return pd.read_csv(p) if p.exists() else pd.DataFrame()
+
+          m = read(DATA/'materials_db.csv')
+          if m.empty:
+              print("ERROR: data/materials_db.csv missing or empty"); sys.exit(1)
+          p = read(DATA/'processes_db.csv')
+          b = read(DATA/'bom_template.csv')
+
+          mpo = read(OV/'material_price_overrides.csv') if OV.exists() else pd.DataFrame()
+          if not mpo.empty and {'material_id','price_eur_per_kg'}.issubset(mpo.columns):
+              for c in ['price_source','source_url','source_date']:
+                  if c not in mpo.columns: mpo[c] = pd.NA
+              m = m.merge(mpo[['material_id','price_eur_per_kg','price_source','source_url','source_date']],
+                          on='material_id', how='left', suffixes=('','__ovr'))
+              for c in ['price_eur_per_kg','price_source','source_url','source_date']:
+                  oc = c+'__ovr'
+                  if oc in m.columns:
+                      m[c] = m[oc].where(pd.notna(m[oc]), m[c])
+              m = m[[c for c in m.columns if not c.endswith('__ovr')]]
+
+          m.to_csv(OUT/'materials_resolved.csv', index=False)
+          if not p.empty: p.to_csv(OUT/'processes_resolved.csv', index=False)
+
+          if not b.empty:
+              view = b.merge(m[['material_id','price_eur_per_kg']], on='material_id', how='left')
+              lt_per_qty, mt_per_qty, lrate, mrate = 0.1, 0.05, 45.0, 80.0
+              def calc_row(r):
+                  mk, qty, price = (r.get('mass_kg') or 0.0), (r.get('qty') or 0.0), (r.get('price_eur_per_kg') or 0.0)
+                  lt, mt = qty*lt_per_qty, qty*mt_per_qty
+                  return (mk*price) + (mt*mrate) + (lt*lrate)
+              view['part_cost_eur'] = view.apply(calc_row, axis=1)
+              view.to_csv(OUT/'bom_calculated_plus.csv', index=False)
+
+          with pd.ExcelWriter(OUT/'plus_bundle.xlsx') as xw:
+              m.to_excel(xw, sheet_name='materials', index=False)
+              if not p.empty: p.to_excel(xw, sheet_name='processes', index=False)
+              if (OUT/'bom_calculated_plus.csv').exists():
+                  pd.read_csv(OUT/'bom_calculated_plus.csv').to_excel(xw, sheet_name='bom_calc', index=False)
+          print("Built PLUS artifacts to ./dist")
+          """), encoding="utf-8")
           PY
 
       - name: Detect changes
@@ -187,21 +239,58 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit to branch (safe default)
+      - name: Commit to branch
         if: steps.changes.outputs.changed == 'true' && inputs.mode == 'branch'
         run: |
           git checkout -B "${{ inputs.branch }}"
           git add -A
-          git commit -m "chore: apply ULTIMATE+ update (no PR)"
-          git push --set-upstream origin "${{ inputs.branch }}" --force
+          git commit -m "chore: apply ULTIMATE+ update (direct, no PR)"
+          git push -f -u origin "${{ inputs.branch }}"
 
-      - name: Commit to main (opt-in)
+      - name: Commit to main
         if: steps.changes.outputs.changed == 'true' && inputs.mode == 'main'
         run: |
           git add -A
-          git commit -m "chore: apply ULTIMATE+ update (no PR)"
+          git commit -m "chore: apply ULTIMATE+ update (direct, no PR)"
           git push origin HEAD:main
 
-      - name: Dry-run diff
-        if: steps.changes.outputs.changed == 'true' && inputs.mode == 'dry-run'
-        run: git diff --stat
+      - name: Setup Python for build
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+
+      - name: Build artifacts
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          python -m pip install -U pip pandas openpyxl
+          python .github/workflows/scripts/build_plus_artifacts.py
+          ls -la dist || true
+
+      - name: Upload artifacts
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cost-tool-plus
+          path: dist/*
+          retention-days: 14
+
+      - name: Create tag & release
+        if: steps.changes.outputs.changed == 'true' && inputs.release == 'true' && inputs.mode == 'main'
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -e
+          if [ -z "$TAG" ]; then
+            TAG="v$(date -u +%Y.%m.%d-%H%M)"
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "Created tag $TAG"
+
+      - name: Publish GitHub Release
+        if: steps.changes.outputs.changed == 'true' && inputs.release == 'true' && inputs.mode == 'main'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
