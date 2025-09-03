@@ -1,281 +1,76 @@
-# pages/16_Routing_Kosten.py
-# Volledige, robuuste versie:
-# - Veilige BOM-load met fallback naar session_state
-# - Duplex-dichtheid (1.4462) automatisch herkend
-# - Slimme tariefmapping (laser/bend/TIG/CNC_mill/CNC_turn/taper_turn/drill_bore/deburr)
-# - Extra opslag voor zware assen (diameter ≥300 mm of lengte ≥3000 mm): +25% op €/min
-# - Robuuste tabelweergave + CSV-download
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
 
-import os, json, math
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import math
 
-st.set_page_config(page_title="Routing & Kosten", page_icon="🛠️", layout="wide")
-st.title("🛠️ Routing & kosten — duplex aware + veilige BOM")
+st.title("🧮 Routing & bewerkingstijd")
 
-# ---------- Materiaal-dichtheden (kg/mm³)
-DENSITY_KG_PER_MM3 = {
-    "stainless":    7.9e-6,
-    "duplex":       7.8e-6,   # 1.4462 / 2205
-    "aluminum":     2.7e-6,
-    "carbon_steel": 7.85e-6,
-}
+# Eenvoudige inputs (kun je later koppelen aan processes_db.csv)
+c1, c2 = st.columns(2)
+with c1:
+    machine_rate = st.number_input("Machine rate €/h", value=95.0, step=1.0)
+with c2:
+    labor_rate = st.number_input("Labor rate €/h", value=45.0, step=1.0)
 
-# ---------- Helpers
-def infer_family_from_grade(grade: str) -> str:
-    g = (grade or "").lower()
-    # duplex markers
-    if "1.4462" in g or "2205" in g or "s31803" in g or "s32205" in g:
-        return "duplex"
-    # rvs austenitisch
-    if any(k in g for k in ["304", "316", "1.43", "1.45"]):
-        return "stainless"
-    # aluminium
-    if any(k in g for k in ["6082", "6061", "5754", "1050", "alu", "aluminium"]):
-        return "aluminum"
-    return "carbon_steel"
+oh = st.slider("Overhead %", 0, 50, 25) / 100
+m  = st.slider("Marge %", 0, 40, 10) / 100
 
-def latest_material_price(df_prices, grade, region="EU", unit="€/kg"):
-    if df_prices.empty:
-        return None
-    d = df_prices.copy()
-    d = d[d["grade"].astype(str).str.lower() == str(grade).lower()]
-    if region:
-        d = d[d["region"].astype(str).str.upper() == str(region).upper()]
-    if unit:
-        d = d[d["unit"].astype(str) == unit]
-    if d.empty:
-        return None
-    d["as_of_date"] = pd.to_datetime(d["as_of_date"], errors="coerce")
-    d = d.sort_values("as_of_date")
-    return float(d.iloc[-1]["price"])
+def cost_setup_minutes(setup_min, mr, lr):  return (setup_min/60.0) * (mr + lr)
+def cost_runtime_minutes(rt_min, mr, lr):   return (rt_min/60.0) * (mr + lr)
+def cost_with_overheads(base, oh, m):       return base * (1 + oh) * (1 + m)
 
-def midpoint_rate(df_rates, process_kw, country="Netherlands"):
-    if df_rates.empty:
-        return None
-    d = df_rates.copy()
-    d = d[d["process"].astype(str).str.lower().str.contains(str(process_kw).lower())]
-    if not d.empty:
-        d2 = d[d["country"].astype(str).str.lower() == str(country).lower()]
-        if not d2.empty:
-            d = d2
-    if d.empty:
-        return None
-    d["as_of_date"] = pd.to_datetime(d["as_of_date"], errors="coerce")
-    r = d.sort_values("as_of_date").iloc[-1]
-    return float((r["rate_min"] + r["rate_max"]) / 2.0) / 60.0  # €/min
+def cnc_mill_time(toolpath_mm, feed_mm_min, passes=1, retract_penalty_min=0.15, k_complexity=1.0):
+    return (toolpath_mm / max(feed_mm_min, 1)) * k_complexity + passes * retract_penalty_min
 
-def map_rate_for_process(df_rates, proc_name: str):
-    """
-    Slimme tariefmapping.
-    Ondersteund: laser, bend, TIG, CNC_mill, CNC_turn, taper_turn, drill_bore, deburr (fallbacks).
-    """
-    p = (proc_name or "").strip().lower()
-    direct_map = {
-        "laser":       ["laser", "lasersnijden"],
-        "bend":        ["bend", "buigen", "kantbank", "press brake"],
-        "tig":         ["tig", "tig welding", "lassen tig"],
-        "cnc_mill":    ["cnc mill", "cnc milling", "frezen"],
-        "cnc_turn":    ["cnc turn", "cnc turning", "draaien"],
-        "taper_turn":  ["taper turn", "taper turning", "conisch draaien"],
-        "drill_bore":  ["drill", "deep drill", "boren", "gun drill", "drill bore"],
-        "deburr":      ["deburr", "afbramen"],
-    }
-    for key, kws in direct_map.items():
-        if p == key or any(p == k or p in k for k in kws):
-            if key == "laser":
-                return midpoint_rate(df_rates, "laser") or midpoint_rate(df_rates, "cnc milling")
-            if key == "bend":
-                return midpoint_rate(df_rates, "cnc milling")
-            if key == "tig":
-                return midpoint_rate(df_rates, "tig")
-            if key == "cnc_mill":
-                return midpoint_rate(df_rates, "cnc milling")
-            if key in ["cnc_turn", "taper_turn"]:
-                return midpoint_rate(df_rates, "cnc turning") or midpoint_rate(df_rates, "cnc")
-            if key == "drill_bore":
-                return midpoint_rate(df_rates, "cnc") or midpoint_rate(df_rates, "cnc milling")
-            if key == "deburr":
-                return midpoint_rate(df_rates, "cnc") or midpoint_rate(df_rates, "cnc milling")
-    # ultieme fallback
-    return midpoint_rate(df_rates, p) or (1.00/60.0)
+def laser_time(cut_len_mm, cut_speed_mm_min, pierces, pierce_time_min=0.2):
+    return (cut_len_mm / max(cut_speed_mm_min, 1)) + pierces * pierce_time_min
 
-def est_process_minutes(part, process):
-    """Vuistregels per stuk: cycle + (setup/qty)."""
-    q = max(1, int(part.get("qty", 1)))
-    p = (process or "").strip().lower()
-    base = {
-        "laser":       (5.0, 0.43),
-        "bend":        (8.0, 0.50),
-        "tig":         (10.0, 0.60),
-        "cnc_mill":    (12.0, 1.20),
-        "cnc_turn":    (10.0, 1.00),
-        "taper_turn":  (12.0, 1.30),    # conisch draaien
-        "drill_bore":  (10.0, 1.10),    # diepboren/gun-drill
-        "deburr":      (3.0, 0.20),
-    }
-    setup, cycle = base.get(p, (5.0, 0.30))
-    return (setup / q) + cycle
+def bend_time(bends, rotate_penalty_min=0.1): return bends * (0.5 + rotate_penalty_min)
+def weld_time(weld_len_mm, dep_rate_mm_min, k_precision=1.0): return (weld_len_mm / max(dep_rate_mm_min,1)) * k_precision
 
-def mass_kg(part):
-    """Schat massa op basis van vorm + dichtheid (incl. duplex 7.8e-6)."""
-    grade = part.get("material_grade", "")
-    fam = (part.get("material_family") or infer_family_from_grade(grade)).lower()
-    rho = DENSITY_KG_PER_MM3.get(fam, 7.85e-6)
-    form = (part.get("form") or "").lower()
-    t   = part.get("thickness_mm") or 0
-    L   = part.get("length_mm") or 0
-    W   = part.get("width_mm") or 0
-    dia = part.get("diameter_mm") or 0
+tab1, tab2 = st.tabs(["Laser + Buigen + Frezen", "Lassen + Frezen"])
 
-    if form in ("sheet", "plate") and t and L and W:
-        vol = float(t) * float(L) * float(W)  # mm³
-    elif form in ("bar", "staf", "round", "rod") and dia and L:
-        vol = math.pi * (float(dia)/2.0)**2 * float(L)
-    else:
-        vol = float(t or 0) * float(L or 0) * float(W or 0)
+def show_route(route):
+    rows, total = [], 0.0
+    for i, step in enumerate(route, start=1):
+        setup = cost_setup_minutes(step.get("setup_min",0), machine_rate, labor_rate)
+        runtime = cost_runtime_minutes(step.get("runtime_min",0), machine_rate, labor_rate)
+        base = setup + runtime
+        rows.append({"seq":i,"op":step.get("op"),
+                     "setup_eur":round(setup,2),"runtime_eur":round(runtime,2),
+                     "base_eur":round(base,2),"note":step.get("note","")})
+        total += base
+    df = pd.DataFrame(rows)
+    final = cost_with_overheads(total, oh, m)
+    st.dataframe(df, use_container_width=True)
+    st.metric("Totaal (excl. OH & marge)", f"€ {total:,.2f}")
+    st.metric("Eindprijs (incl. OH & marge)", f"€ {final:,.2f}")
 
-    return 0.0 if vol <= 0 else vol * rho  # kg
+with tab1:
+    l = st.number_input("Laser snijlengte (mm)", 800.0, step=10.0)
+    v = st.number_input("Laser snelheid (mm/min)", 2500.0, step=10.0)
+    pierces = st.number_input("Aantal pierces", 6, step=1)
+    bends = st.number_input("Aantal buigingen", 4, step=1)
+    toolpath = st.number_input("Frezen toolpath (mm)", 1500.0, step=10.0)
+    feed = st.number_input("Frezen voeding (mm/min)", 600.0, step=10.0)
 
-# ---------- Veilige BOM-inleeslogica met fallback
-bom_path = "data/bom_current.json"
-raw = ""
-if os.path.exists(bom_path):
-    with open(bom_path, "r", encoding="utf-8") as f:
-        raw = f.read().strip()
+    route = [
+        {"op":"LASER","setup_min":10,"runtime_min": laser_time(l, v, pierces)},
+        {"op":"BEND","setup_min":8,"runtime_min": bend_time(bends)},
+        {"op":"CNC_MILL","setup_min":12,"runtime_min": cnc_mill_time(toolpath, feed, passes=2, k_complexity=1.1)},
+    ]
+    show_route(route)
 
-def _safe_parse_bom(txt: str):
-    data = json.loads(txt)
-    if not isinstance(data, dict) or "bom" not in data:
-        raise ValueError("BOM mist root-object of 'bom' lijst")
-    if not isinstance(data["bom"], list):
-        raise ValueError("'bom' is geen lijst")
-    return data
+with tab2:
+    wl = st.number_input("Laslengte (mm)", 300.0, step=10.0)
+    dep = st.number_input("Neersmelt (mm/min)", 80.0, step=1.0)
+    tp = st.number_input("Frezen toolpath (mm)", 900.0, step=10.0)
+    fd = st.number_input("Voeding (mm/min)", 500.0, step=10.0)
 
-try:
-    if not raw:
-        raise ValueError("Leeg bestand")
-    bom_json = _safe_parse_bom(raw)
-    st.session_state["last_good_bom"] = bom_json
-except Exception as e:
-    if "last_good_bom" in st.session_state and st.session_state["last_good_bom"]:
-        st.warning(f"BOM bestand onleesbaar ({e}). Gebruik laatste geldige BOM uit geheugen.")
-        bom_json = st.session_state["last_good_bom"]
-    else:
-        st.error(f"BOM niet leesbaar: {e}. Ga naar **BOM import** en sla een geldige BOM op.")
-        st.stop()
-
-bom = bom_json.get("bom", [])
-
-# ---------- Prijzen & tarieven
-df_prices = pd.read_csv("data/material_prices.csv") if os.path.exists("data/material_prices.csv") else pd.DataFrame()
-df_rates  = pd.read_csv("data/labor_rates.csv")  if os.path.exists("data/labor_rates.csv")  else pd.DataFrame()
-
-# ---------- Reken per item
-rows = []
-for p in bom:
-    item  = p.get("item_code", "?")
-    qty   = int(p.get("qty", 1))
-    grade = p.get("material_grade", "").strip()
-    fam   = (p.get("material_family") or infer_family_from_grade(grade)).strip()
-
-    # €/kg (region EU, unit €/kg)
-    eurkg = latest_material_price(df_prices, grade=grade, region="EU", unit="€/kg") or 0.0
-
-    # massa & materiaal
-    m_kg = mass_kg(p)
-    mat_eur_pc = eurkg * m_kg
-
-    # processen
-    procs = [x.strip() for x in (p.get("processes") or [])]
-    proc_cost_eur_per_pc = 0.0
-    det = []
-
-    # zware-assen detectie (globaal voor alle processen)
-    dia = float(p.get("diameter_mm") or 0)
-    L   = float(p.get("length_mm") or 0)
-    is_heavy = (dia >= 300) or (L >= 3000)
-
-    for proc in procs:
-        norm = proc.upper() if proc.upper() == "TIG" else proc.lower()
-        rate_eur_min = map_rate_for_process(df_rates, norm) or (1.00/60.0)
-
-        # extra opslag voor zware assen
-        if is_heavy:
-            rate_eur_min *= 1.25  # +25% door zware opspanning/sneden/handlings
-
-        minutes = est_process_minutes(p, norm)
-        cost_pc = minutes * rate_eur_min
-        proc_cost_eur_per_pc += cost_pc
-        det.append(f"{proc}@{rate_eur_min:.2f}€/min × {minutes:.2f} min = €{cost_pc:.2f}")
-
-    total_per_pc = mat_eur_pc + proc_cost_eur_per_pc
-
-    rows.append({
-        "item_code": item,
-        "qty": qty,
-        "grade": grade,
-        "material_family": fam,
-        "mass_kg_per_pc": round(m_kg, 4),
-        "eur_per_kg": round(eurkg, 4),
-        "Material €/pc": round(mat_eur_pc, 2),
-        "Proc €/pc": round(proc_cost_eur_per_pc, 2),
-        "Total €/pc": round(total_per_pc, 2),
-        "Processes": " | ".join(det) if det else ""
-    })
-
-df = pd.DataFrame(rows)
-
-# ---------- Weergave (robuust)
-st.subheader("Per item")
-
-expected_cols = [
-    "item_code","qty","grade","material_family",
-    "mass_kg_per_pc","eur_per_kg","Material €/pc","Proc €/pc","Total €/pc"
-]
-for col in expected_cols:
-    if col not in df.columns:
-        df[col] = pd.NA
-
-if df.empty:
-    st.warning("Geen regels om te tonen. Controleer je BOM in **BOM import** en sla opnieuw op.")
-    st.stop()
-
-df_display = df[expected_cols].copy()
-st.dataframe(df_display, use_container_width=True)
-
-# Totale waarde veilig berekenen
-try:
-    tot_value = float(
-        pd.to_numeric(df["Total €/pc"], errors="coerce").fillna(0) *
-        pd.to_numeric(df["qty"],        errors="coerce").fillna(0)
-    .sum())
-except Exception:
-    tot_value = 0.0
-
-st.success(f"🌟 Totale waarde (qty × Total €/pc): € {tot_value:,.2f}")
-
-with st.expander("Procesdetails (per item)"):
-    if "Processes" in df.columns and df["Processes"].notna().any():
-        for _, r in df.iterrows():
-            st.markdown(f"**{r['item_code']}** — {r['Processes'] or '_geen procesregels_'}")
-    else:
-        st.markdown("_Geen procesregels beschikbaar._")
-
-# ---------- Hints / waarschuwingen
-if "eur_per_kg" in df.columns:
-    mask = df["eur_per_kg"].isna() | (pd.to_numeric(df["eur_per_kg"], errors="coerce").fillna(0) == 0)
-    missing_prices = df.loc[mask, "grade"].dropna().astype(str).tolist()
-    if missing_prices:
-        st.warning(
-            "Geen €/kg gevonden voor: " + ", ".join(sorted(set(missing_prices))) +
-            ". Voeg regels toe in **material_prices.csv** met `region='EU'` en `unit='€/kg'` (en juiste `grade`)."
-        )
-
-# ---------- Download (schone tabel)
-st.download_button(
-    "⬇️ Download resultaten (CSV)",
-    df_display.to_csv(index=False),
-    file_name="routing_kosten_resultaten.csv",
-    mime="text/csv"
-)
+    route = [
+        {"op":"WELD_TIG","setup_min":15,"runtime_min": weld_time(wl, dep, k_precision=1.2)},
+        {"op":"CNC_MILL","setup_min":10,"runtime_min": cnc_mill_time(tp, fd, passes=1)},
+    ]
+    show_route(route)
