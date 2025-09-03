@@ -1,6 +1,7 @@
 from bootstrap import configure_page, init_state
 configure_page(); init_state()
 
+from utils.safe import run_safely
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -12,13 +13,13 @@ def load_materials_any():
     # 1) Nieuw schema (aanbevolen)
     p_new = Path("data/materials_db.csv")
     if p_new.exists():
-        df = pd.read_csv(p_new)
+        df = run_safely("read_csv", pd.read_csv, p_new)
         if "material_id" in df.columns:
             return df, "materials_db.csv"
     # 2) Oud schema (compat)
     p_old = Path("data/material_prices.csv")
     if p_old.exists():
-        df = pd.read_csv(p_old)
+        df = run_safely("read_csv", pd.read_csv, p_old)
         # map minimaal naar nieuw
         # verwacht minstens: material_id, grade, price_eur_per_kg
         for col in ["material_id","grade","en_number","category","form","density_kg_per_m3",
@@ -37,7 +38,7 @@ st.caption(f"Bronbestand gedetecteerd: **{origin}**")
 # Upload van bijgewerkte prijzen
 up = st.file_uploader("Upload bijgewerkte materialen-CSV (zelfde kolommen)", type=["csv"])
 if up:
-    new = pd.read_csv(up)
+    new = run_safely("read_csv", pd.read_csv, up)
     key = "material_id"
     base = materials_df.drop(columns=[c for c in ["price_eur_per_kg","price_source","source_url","source_date"] if c in materials_df.columns], errors="ignore")
     merged = base.merge(new[[key,"price_eur_per_kg","price_source","source_url","source_date"]], on=key, how="left")

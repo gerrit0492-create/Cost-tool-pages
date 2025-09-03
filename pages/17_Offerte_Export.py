@@ -1,3 +1,7 @@
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
+
+from utils.safe import run_safely
 import os, json, pandas as pd, streamlit as st
 from jinja2 import Environment, FileSystemLoader
 from datetime import date
@@ -30,8 +34,8 @@ bom = json.load(open("data/bom_current.json"))
 bom_items = bom.get("bom", [])
 assembly = bom.get("assembly", {"name":"", "qty":1})
 
-df_prices = pd.read_csv("data/material_prices.csv")
-df_rates  = pd.read_csv("data/labor_rates.csv")
+df_prices = run_safely("read_csv", pd.read_csv, "data/material_prices.csv")
+df_rates  = run_safely("read_csv", pd.read_csv, "data/labor_rates.csv")
 
 # --- Kleine helpers (zelfde logica als Routing v1)
 DENSITY_KG_PER_MM3 = {

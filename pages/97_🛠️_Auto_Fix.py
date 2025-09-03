@@ -1,3 +1,7 @@
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
+
+from utils.safe import run_safely
 # pages/97_🛠️_Auto_Fix.py
 from __future__ import annotations
 import sys, json, base64

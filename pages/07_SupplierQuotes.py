@@ -1,3 +1,7 @@
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
+
+from utils.safe import run_safely
 # bovenin elk .py bestand
 import streamlit as st, traceback
 
@@ -42,7 +46,7 @@ with col2:
     up = st.file_uploader("Upload quotes CSV", type=["csv"])
     if up:
         try:
-            st.session_state["quotes_df"] = pd.read_csv(up)
+            st.session_state["quotes_df"] = run_safely("read_csv", pd.read_csv, up)
             st.success("Quotes geladen.")
         except Exception as e:
             st.error(f"Kon CSV niet lezen: {e}")

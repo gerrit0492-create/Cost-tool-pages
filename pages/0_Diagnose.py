@@ -1,3 +1,7 @@
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
+
+from utils.safe import run_safely
 import os, sys, json, traceback, time
 from pathlib import Path
 import streamlit as st

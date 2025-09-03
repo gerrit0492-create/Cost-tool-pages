@@ -1,3 +1,4 @@
+from utils.safe import run_safely
 # bovenin elk .py bestand
 from bootstrap import configure_page, init_state
 configure_page(); init_state()

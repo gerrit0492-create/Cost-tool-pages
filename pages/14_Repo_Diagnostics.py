@@ -1,3 +1,7 @@
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
+
+from utils.safe import run_safely
 # pages/00_Repo_Diagnostics.py
 import os, sys, textwrap, streamlit as st
 

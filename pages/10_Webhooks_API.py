@@ -1,3 +1,7 @@
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
+
+from utils.safe import run_safely
 # bovenin elk .py bestand
 import streamlit as st, traceback
 
@@ -157,7 +161,7 @@ if sel:
                 st.error(f"JSON parse fout: {e}")
         elif sel.lower().endswith(".csv"):
             try:
-                df = pd.read_csv(io.BytesIO(raw))
+                df = run_safely("read_csv", pd.read_csv, io.BytesIO(raw))
                 st.dataframe(df, use_container_width=True)
                 dest = st.radio("Interpretatie", ["BOM","Routing","Onbekend"], horizontal=True)
                 if st.button("⬇️ Zet in sessie als geselecteerde tabel"):

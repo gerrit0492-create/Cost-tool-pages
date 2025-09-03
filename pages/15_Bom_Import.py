@@ -1,6 +1,7 @@
 from bootstrap import configure_page, init_state
 configure_page(); init_state()
 
+from utils.safe import run_safely
 import streamlit as st
 import pandas as pd
 
@@ -13,7 +14,7 @@ st.title("📥 BOM import")
 up = st.file_uploader("Upload BOM CSV (zie template-kolommen)", type=["csv"])
 if up:
     try:
-        df = pd.read_csv(up)
+        df = run_safely("read_csv", pd.read_csv, up)
         missing = [c for c in BOM_COLS if c not in df.columns]
         if missing:
             st.error(f"Ontbrekende kolommen: {', '.join(missing)}")

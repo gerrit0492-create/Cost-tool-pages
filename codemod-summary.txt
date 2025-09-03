@@ -1,0 +1,23 @@
+Changed files:
+home.py
+pages/98_🧪_Schema_Check.py
+pages/04_Materiaalbronnen.py
+pages/05_DataQuality.py
+pages/00_Debug.py
+pages/01_Calculatie.py
+pages/0_Diagnose.py
+pages/09_Dashboard.py
+pages/14_Repo_Diagnostics.py
+pages/17_Offerte_Export.py
+pages/18_Offerte_DOCX.py
+pages/16_Routing_Kosten.py
+pages/06_ScenarioPlanner.py
+pages/10_Webhooks_API.py
+pages/03_Presets.py
+pages/07_SupplierQuotes.py
+pages/12_Rapport.py
+pages/13_Marktdata.py
+pages/99_🩺_App_Check.py
+pages/11_Rollen_Branding.py
+pages/15_Bom_Import.py
+pages/97_🛠️_Auto_Fix.py

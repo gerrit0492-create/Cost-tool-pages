@@ -1,3 +1,7 @@
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
+
+from utils.safe import run_safely
 import streamlit as st, ast, pathlib
 
 st.title("Syntax check")

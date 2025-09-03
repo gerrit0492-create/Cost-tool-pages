@@ -1,3 +1,7 @@
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
+
+from utils.safe import run_safely
 # pages/18_Offerte_DOCX.py  (complete, met fix voor st.dataframe)
 import os, io, json, math
 from datetime import date
@@ -35,8 +39,8 @@ if missing:
 bom = json.load(open("data/bom_current.json"))
 items = bom.get("bom", [])
 assembly = bom.get("assembly", {"name":"", "qty":1})
-df_prices = pd.read_csv("data/material_prices.csv")
-df_rates  = pd.read_csv("data/labor_rates.csv")
+df_prices = run_safely("read_csv", pd.read_csv, "data/material_prices.csv")
+df_rates  = run_safely("read_csv", pd.read_csv, "data/labor_rates.csv")
 
 # ---- Helpers
 DENSITY_KG_PER_MM3 = {"stainless":7.9e-6,"duplex":7.8e-6,"aluminum":2.7e-6,"carbon_steel":7.85e-6}

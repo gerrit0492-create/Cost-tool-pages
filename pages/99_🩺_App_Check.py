@@ -1,3 +1,7 @@
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
+
+from utils.safe import run_safely
 # pages/99_🩺_App_Check.py
 # Robuuste App Check:
 # - Scant .py-bestanden onder repo
