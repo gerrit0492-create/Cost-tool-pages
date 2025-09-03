@@ -1,0 +1,42 @@
+name: Build Cost-Tool Artifacts
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - data/**
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas
+      - name: Generate artifacts
+        run: |
+          python - <<'PY'
+          import pandas as pd, pathlib, zipfile
+          data = pathlib.Path('data')
+          out = pathlib.Path('dist'); out.mkdir(exist_ok=True)
+          # Load materials and write resolved version (nu zonder scraping, gewoon pass-through)
+          m = pd.read_csv(data / 'materials_db.csv')
+          m.to_csv(out / 'materials_resolved.csv', index=False)
+          # Kopieer processes en bom (indien aanwezig)
+          for fname in ['processes_db.csv', 'bom_template.csv']:
+            p = data / fname
+            if p.exists():
+              (out / fname).write_bytes(p.read_bytes())
+          # Zip alles
+          zpath = out / 'cost_tool_artifacts.zip'
+          with zipfile.ZipFile(zpath, 'w', zipfile.ZIP_DEFLATED) as z:
+            for p in out.glob('*'):
+                z.write(p, p.name)
+          print('Artifacts in ', out)
+          PY
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cost-tool-artifacts
+          path: dist/*
+          retention-days: 7
