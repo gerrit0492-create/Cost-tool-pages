@@ -12,15 +12,17 @@ permissions:
 
 jobs:
   apply:
+    # voorkom eindeloze loops door bot-commits
     if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Apply update (write files via Python)
         run: |
           python - <<'PY'
-          import pathlib, textwrap, os
+          import pathlib, textwrap
 
           root = pathlib.Path(".")
           (root / "utils").mkdir(parents=True, exist_ok=True)
@@ -312,11 +314,19 @@ jobs:
           """), encoding="utf-8")
           PY
 
+      - name: Show git status (debug)
+        run: |
+          git status
+          git diff --stat || true
+
       - name: Open PR with changes
         uses: peter-evans/create-pull-request@v6
         with:
           title: "feat: apply ULTIMATE+ (PLUS pages, costing utils, workflows)"
           branch: "auto/apply-ultimate-plus"
+          branch-suffix: "random"         # voorkom botssingen als de branch al bestaat
           commit-message: "feat: add PLUS pages + costing utils + build scripts"
           labels: "automation,plus,costing"
           draft: false
+          delete-branch: true             # ruim branch op na merge
+          skip-if-no-changes: true        # sla PR over als er niets te veranderen is
