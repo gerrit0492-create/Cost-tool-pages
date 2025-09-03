@@ -1,0 +1,93 @@
+name: Auto Codemod — Bootstrap & Tracebacks
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  codemod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run codemod
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          repo = Path(".")
+          pages = list((repo/"pages").glob("*.py"))
+          targets = [repo/"home.py"] + pages
+          safe_py = repo/"utils"/"safe.py"
+          safe_py.parent.mkdir(parents=True, exist_ok=True)
+          if not safe_py.exists():
+            safe_py.write_text("from __future__ import annotations\nimport traceback\nimport streamlit as st\n\n"
+            "def run_safely(label: str, fn, *args, **kwargs):\n"
+            "    try:\n"
+            "        return fn(*args, **kwargs)\n"
+            "    except Exception as e:\n"
+            "        st.error(f\"{label} failed\")\n"
+            "        st.exception(e)\n"
+            "        traceback.print_exc()\n"
+            "        return None\n", encoding="utf-8")
+          BOOT_HEADER = ("from bootstrap import configure_page, init_state\nconfigure_page(); init_state()\n\n")
+          def inject_bootstrap_header(txt:str)->str:
+            if "configure_page();" in txt and "init_state()" in txt:
+              return txt
+            lines = txt.splitlines(True)
+            insert_at = 0
+            if lines and lines[0].startswith("#!"):
+              insert_at = 1
+            if lines and "coding:" in lines[0]:
+              insert_at = 1
+            lines.insert(insert_at, BOOT_HEADER)
+            return "".join(lines)
+          def ensure_import_safe(txt:str)->str:
+            if "from utils.safe import run_safely" in txt:
+              return txt
+            idx = txt.find(BOOT_HEADER)
+            if idx >= 0:
+              return txt[:idx+len(BOOT_HEADER)] + "from utils.safe import run_safely\n" + txt[idx+len(BOOT_HEADER):]
+            return "from utils.safe import run_safely\n" + txt
+          def wrap_read_csv(txt:str)->str:
+            pattern = r"pd\.read_csv\s*\("
+            return re.sub(pattern, 'run_safely("read_csv", pd.read_csv, ', txt)
+          changed = []
+          for path in targets:
+            if not path.exists():
+              continue
+            original = path.read_text(encoding="utf-8")
+            updated = original
+            updated = inject_bootstrap_header(updated)
+            updated = ensure_import_safe(updated)
+            updated = wrap_read_csv(updated)
+            if updated != original:
+              path.write_text(updated, encoding="utf-8")
+              changed.append(str(path))
+          summary = Path("codemod-summary.txt")
+          if changed:
+            summary.write_text("Changed files:\n" + "\n".join(changed) + "\n", encoding="utf-8")
+          else:
+            summary.write_text("No changes made (already compliant).\n", encoding="utf-8")
+          PY
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          title: "chore: codemod bootstrap + safe tracebacks"
+          body-path: "codemod-summary.txt"
+          branch: "auto/codemod-bootstrap-tracebacks"
+          commit-message: "chore: codemod bootstrap header + run_safely wrappers"
+          labels: "automation, codemod"
+          draft: false
