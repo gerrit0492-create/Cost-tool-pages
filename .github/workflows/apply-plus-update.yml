@@ -1,27 +1,35 @@
-name: Apply ULTIMATE Plus Update
+name: Apply ULTIMATE Plus (no PR)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+    inputs:
+      mode:
+        description: Waar moet de update landen?
+        type: choice
+        options: [branch, main, dry-run]
+        default: branch
+      branch:
+        description: Branchnaam (alleen gebruikt bij mode=branch)
+        required: false
+        default: auto/apply-ultimate-plus
 
 permissions:
   contents: write
-  pull-requests: write
+  issues: write
 
 jobs:
   apply:
-    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Apply update (write files via Python)
+      - name: Write files via Python (ULTIMATE+)
         run: |
           python - <<'PY'
           import pathlib, textwrap
+
           root = pathlib.Path(".")
           (root / "utils").mkdir(parents=True, exist_ok=True)
           (root / "pages").mkdir(parents=True, exist_ok=True)
@@ -59,22 +67,16 @@ jobs:
 
           P = paths()
           materials = run_safely("Load materials", read_csv_safe, P["materials"], SCHEMA_MATERIALS)
-          if materials is None:
-              st.stop()
+          if materials is None: st.stop()
 
           up = st.file_uploader("Upload BOM CSV (of gebruik data/bom_template.csv)", type=["csv"])
-          if up:
-              bom = run_safely("Read uploaded BOM", pd.read_csv, up)
-          else:
-              bom = run_safely("Read BOM template", read_csv_safe, P["bom"], SCHEMA_BOM)
-          if bom is None:
-              st.stop()
+          if up: bom = run_safely("Read uploaded BOM", pd.read_csv, up)
+          else:  bom = run_safely("Read BOM template", read_csv_safe, P["bom"], SCHEMA_BOM)
+          if bom is None: st.stop()
 
           needed = ["material_id","qty","mass_kg","process_route"]
           missing = [c for c in needed if c not in bom.columns]
-          if missing:
-              st.error("Ontbrekende BOM kolommen: " + ", ".join(missing))
-              st.stop()
+          if missing: st.error("Ontbrekende BOM kolommen: " + ", ".join(missing)); st.stop()
 
           view = bom.merge(materials[["material_id","price_eur_per_kg"]], on="material_id", how="left")
 
@@ -85,11 +87,8 @@ jobs:
           labor_rate   = st.sidebar.number_input("Labor rate (EUR/h)",   min_value=0.0, value=45.0, step=5.0)
 
           def calc_row(r):
-              mk = (r.get("mass_kg") or 0.0)
-              qty = (r.get("qty") or 0.0)
-              price = (r.get("price_eur_per_kg") or 0.0)
-              lt = qty * lt_per_qty
-              mt = qty * mt_per_qty
+              mk = (r.get("mass_kg") or 0.0); qty = (r.get("qty") or 0.0); price = (r.get("price_eur_per_kg") or 0.0)
+              lt = qty * lt_per_qty; mt = qty * mt_per_qty
               return part_cost(mk, price, mt, machine_rate, lt, labor_rate)
 
           view["part_cost_eur"] = view.apply(calc_row, axis=1)
@@ -112,8 +111,7 @@ jobs:
 
           p = paths()["processes"]
           df = run_safely("Load processes", read_csv_safe, p, SCHEMA_PROCESSES)
-          if df is None:
-              st.stop()
+          if df is None: st.stop()
 
           st.subheader("Basis tarieven (CSV)")
           st.dataframe(df[["process_id","machine_rate_eur_h","labor_rate_eur_h","overhead_pct","margin_pct"]].fillna(""),
@@ -149,8 +147,7 @@ jobs:
           st.title("Scenario Planner - PLUS")
 
           df = run_safely("Load processes", read_csv_safe, paths()["processes"], SCHEMA_PROCESSES)
-          if df is None:
-              st.stop()
+          if df is None: st.stop()
 
           m_mult = st.sidebar.number_input("Machine multiplier", min_value=0.0, value=1.15, step=0.05)
           l_mult = st.sidebar.number_input("Labor multiplier",   min_value=0.0, value=1.05, step=0.05)
@@ -177,25 +174,34 @@ jobs:
       - name: Detect changes
         id: changes
         run: |
-          # toon status
           git status
-          # Detecteer zowel tracked diffs als untracked (nieuwe) files
           if [ -n "$(git status --porcelain)" ]; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            git diff --stat || true
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            echo "No changes to commit"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Open PR with changes
-        if: steps.changes.outputs.has_changes == 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          title: "feat: apply ULTIMATE+ (PLUS pages, costing utils, workflows)"
-          branch: "auto/apply-ultimate-plus"
-          branch-suffix: "random"      # voorkom botsingen als branch bestaat
-          commit-message: "feat: add PLUS pages + costing utils + build scripts"
-          labels: "automation,plus,costing"
-          delete-branch: true           # ruim branch op na merge
-          draft: false
+      - name: Configure git
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit to branch (safe default)
+        if: steps.changes.outputs.changed == 'true' && inputs.mode == 'branch'
+        run: |
+          git checkout -B "${{ inputs.branch }}"
+          git add -A
+          git commit -m "chore: apply ULTIMATE+ update (no PR)"
+          git push --set-upstream origin "${{ inputs.branch }}" --force
+
+      - name: Commit to main (opt-in)
+        if: steps.changes.outputs.changed == 'true' && inputs.mode == 'main'
+        run: |
+          git add -A
+          git commit -m "chore: apply ULTIMATE+ update (no PR)"
+          git push origin HEAD:main
+
+      - name: Dry-run diff
+        if: steps.changes.outputs.changed == 'true' && inputs.mode == 'dry-run'
+        run: git diff --stat
