@@ -1,0 +1,19 @@
+material,grade,form,region,unit,price,currency,as_of_date,source_url,source_name,forecast_3m,forecast_6m,notes
+stainless steel,1.4301 (304),sheet,EU,€/kg,2.30,EUR,2025-09-03,https://voorbeeld.local/304-sheet,Testtarief — 304 sheet,2.38,2.45,Indicatief testtarief
+stainless steel,1.4301 (304),bar,EU,€/kg,2.45,EUR,2025-09-03,https://voorbeeld.local/304-bar,Testtarief — 304 bar,2.55,2.65,Indicatief testtarief
+stainless steel,1.4307 (304L),sheet,EU,€/kg,2.35,EUR,2025-09-03,https://voorbeeld.local/304L-sheet,Testtarief — 304L sheet,2.45,2.55,Indicatief testtarief
+stainless steel,1.4404 (316L),sheet,EU,€/kg,3.10,EUR,2025-09-03,https://voorbeeld.local/316L-sheet,Testtarief — 316L sheet,3.20,3.30,Indicatief testtarief
+stainless steel,1.4404 (316L),bar,EU,€/kg,3.40,EUR,2025-09-03,https://voorbeeld.local/316L-bar,Testtarief — 316L bar,3.55,3.70,Indicatief testtarief
+stainless steel,1.4571 (316Ti),sheet,EU,€/kg,3.20,EUR,2025-09-03,https://voorbeeld.local/316Ti-sheet,Testtarief — 316Ti sheet,3.30,3.45,Indicatief testtarief
+stainless steel,1.4541 (321),sheet,EU,€/kg,3.20,EUR,2025-09-03,https://voorbeeld.local/321-sheet,Testtarief — 321 sheet,3.30,3.40,Indicatief testtarief
+stainless steel,1.4016 (430),sheet,EU,€/kg,1.80,EUR,2025-09-03,https://voorbeeld.local/430-sheet,Testtarief — 430 sheet,1.88,1.95,Indicatief testtarief
+duplex,1.4462 (2205),bar,EU,€/kg,4.20,EUR,2025-09-03,https://voorbeeld.local/2205-bar,Testtarief — 2205 bar,4.35,4.50,Indicatief testtarief
+duplex,1.4462 (2205),sheet,EU,€/kg,3.80,EUR,2025-09-03,https://voorbeeld.local/2205-sheet,Testtarief — 2205 sheet,3.90,4.05,Indicatief testtarief
+super duplex,1.4410 (2507),bar,EU,€/kg,6.20,EUR,2025-09-03,https://voorbeeld.local/2507-bar,Testtarief — 2507 bar,6.40,6.60,Indicatief testtarief
+carbon steel,S235JR,plate,EU,€/kg,0.95,EUR,2025-09-03,https://voorbeeld.local/s235jr-plate,Testtarief — S235JR plate,1.00,1.05,Indicatief testtarief
+carbon steel,S355JR,plate,EU,€/kg,1.05,EUR,2025-09-03,https://voorbeeld.local/s355jr-plate,Testtarief — S355JR plate,1.10,1.15,Indicatief testtarief
+carbon steel,1.1191 (C45E),bar,EU,€/kg,1.20,EUR,2025-09-03,https://voorbeeld.local/c45-bar,Testtarief — C45 bar,1.25,1.30,Indicatief testtarief
+alloy steel,1.7225 (42CrMo4),bar,EU,€/kg,1.60,EUR,2025-09-03,https://voorbeeld.local/42crmo4-bar,Testtarief — 42CrMo4 bar,1.68,1.78,Indicatief testtarief
+alloy steel,1.6582 (34CrNiMo6),bar,EU,€/kg,2.20,EUR,2025-09-03,https://voorbeeld.local/34crnimo6-bar,Testtarief — 34CrNiMo6 bar,2.30,2.45,Indicatief testtarief
+tool steel,1.2379 (X153CrMoV12 / D2),plate,EU,€/kg,3.50,EUR,2025-09-03,https://voorbeeld.local/1.2379-plate,Testtarief — 1.2379 plate,3.65,3.80,Indicatief testtarief
+tool steel,1.2842 (90MnCrV8 / O2),plate,EU,€/kg,2.60,EUR,2025-09-03,https://voorbeeld.local/1.2842-plate,Testtarief — 1.2842 plate,2.70,2.85,Indicatief testtarief
