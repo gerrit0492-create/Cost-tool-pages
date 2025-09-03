@@ -1,200 +1,76 @@
-# pages/04_Materiaalbronnen.py
-
-from __future__ import annotations
-import sys
-from pathlib import Path
-import datetime as dt
-import traceback as _tb
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
 
 import streamlit as st
 import pandas as pd
+from pathlib import Path
+from utils.shared import load_csv
 
-# 1) Altijd eerst page config
-st.set_page_config(page_title="Materiaalbronnen & Scraping", page_icon="🧲", layout="wide")
+st.title("📡 Materiaalprijzen & bronnen")
 
-# 2) Repo-root op sys.path (werkt in Streamlit Cloud en lokaal)
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+def load_materials_any():
+    # 1) Nieuw schema (aanbevolen)
+    p_new = Path("data/materials_db.csv")
+    if p_new.exists():
+        df = pd.read_csv(p_new)
+        if "material_id" in df.columns:
+            return df, "materials_db.csv"
+    # 2) Oud schema (compat)
+    p_old = Path("data/material_prices.csv")
+    if p_old.exists():
+        df = pd.read_csv(p_old)
+        # map minimaal naar nieuw
+        # verwacht minstens: material_id, grade, price_eur_per_kg
+        for col in ["material_id","grade","en_number","category","form","density_kg_per_m3",
+                    "price_eur_per_kg","price_source","source_url","source_date","scrap_pct","yield_loss_pct","notes"]:
+            if col not in df.columns:
+                df[col] = None
+        return df, "material_prices.csv"
+    # 3) Leeg
+    cols = ["material_id","grade","en_number","category","form","density_kg_per_m3",
+            "price_eur_per_kg","price_source","source_url","source_date","scrap_pct","yield_loss_pct","notes"]
+    return pd.DataFrame(columns=cols), "(new)"
 
-# 3) Imports uit jouw shared utils
-try:
-    from utils.shared import (
-        MATERIALS, OTK_KEY, eurton,
-        fetch_otk, fetch_lme_eur_ton
-    )
-except Exception:
-    st.error("Kon utils.shared niet importeren.")
-    st.code("".join(_tb.format_exc()))
-    st.stop()
+materials_df, origin = load_materials_any()
+st.caption(f"Bronbestand gedetecteerd: **{origin}**")
 
-# 4) Debug-schakelaar (standaard UIT). Activeer via ?debug=1 of secrets.DEBUG=true
-DEBUG = (st.query_params.get("debug", ["0"])[0] in ("1", "true", "True")) or bool(st.secrets.get("DEBUG", False))
+# Upload van bijgewerkte prijzen
+up = st.file_uploader("Upload bijgewerkte materialen-CSV (zelfde kolommen)", type=["csv"])
+if up:
+    new = pd.read_csv(up)
+    key = "material_id"
+    base = materials_df.drop(columns=[c for c in ["price_eur_per_kg","price_source","source_url","source_date"] if c in materials_df.columns], errors="ignore")
+    merged = base.merge(new[[key,"price_eur_per_kg","price_source","source_url","source_date"]], on=key, how="left")
+    materials_df = merged
+    st.success("Upload toegepast.")
 
-def _debug_panel():
-    st.subheader("🔧 Debug")
-    st.code(f"ROOT = {ROOT}")
-    st.code(f"sys.path[0:3] = {sys.path[0:3]!r}")
-
-if DEBUG:
-    _debug_panel()
-
-st.title("🧲 Materiaalbronnen & Scraping status")
-st.caption("Live controles voor **Outokumpu** (RVS surcharges) en **LME Aluminium** (€/ton), incl. rekenhulp en cache-refresh.")
-
-# 5) Helpers voor cache/refresh-gedrag
-def clear_cache_for(func) -> bool:
-    """
-    Probeer cache van een (mogelijk) @st.cache_data functie te legen.
-    Werkt alleen als func een .clear attribuut heeft.
-    """
-    try:
-        if hasattr(func, "clear"):
-            func.clear()  # type: ignore[attr-defined]
-            return True
-    except Exception:
-        pass
-    return False
-
-# =========================
-# A) Outokumpu (RVS)
-# =========================
-st.subheader("Outokumpu – RVS surcharges (€/ton)")
-
-otk_cols = st.columns([1, 1, 1, 2])
-with otk_cols[0]:
-    if st.button("🔄 Refresh OTK cache (hard)", key="otk_refresh"):
-        if clear_cache_for(fetch_otk):
-            st.success("OTK-cache geleegd. Klik op ‘Ophalen’ om opnieuw te laden.")
-        else:
-            st.info("Geen cache op fetch_otk gevonden (of al leeg).")
-
-with otk_cols[1]:
-    otk_go = st.button("📡 Ophalen", key="otk_fetch")
-
-if otk_go:
-    st.session_state["_otk_last"] = dt.datetime.utcnow()
-
-otk_time = st.session_state.get("_otk_last")
-
-# Ophalen + cachen in session (simpele UI-cache los van @st.cache_data)
-try:
-    if otk_go or ("_otk_cached" not in st.session_state):
-        otk = fetch_otk() or {}
-        st.session_state["_otk_cached"] = otk
+# Overrides per materiaal
+with st.expander("Snel override instellen (€/kg + bron + datum)"):
+    if len(materials_df) == 0:
+        st.info("Geen materialen aanwezig. Upload of werk je CSV bij.")
     else:
-        otk = st.session_state["_otk_cached"]
-except Exception:
-    otk = {}
-    st.error("Fout bij ophalen Outokumpu-surcharges.")
-    if DEBUG:
-        st.code("".join(_tb.format_exc()))
+        mid = st.selectbox("Materiaal", materials_df["material_id"].dropna().unique().tolist())
+        eurkg = st.number_input("€/kg", min_value=0.0, step=0.1, value=float(materials_df.loc[materials_df.material_id==mid,"price_eur_per_kg"].dropna().head(1).fillna(0).values[0]) if (materials_df.material_id==mid).any() else 0.0)
+        src = st.text_input("Bron (bijv. MCB prijsblad week 35)")
+        sdt = st.text_input("Datum (YYYY-MM-DD)")
+        if st.button("Override toepassen"):
+            ix = materials_df.material_id == mid
+            materials_df.loc[ix, "price_eur_per_kg"] = eurkg
+            materials_df.loc[ix, "price_source"] = src
+            materials_df.loc[ix, "source_date"] = sdt
+            st.success(f"Override toegepast op {mid}")
 
-if otk:
-    df_otk = pd.DataFrame(
-        [{"OTK_key": k, "€/ton": v, "€/kg": eurton(v)} for k, v in otk.items()]
-    ).sort_values("OTK_key")
-    st.dataframe(df_otk, use_container_width=True)
-    tail = f"Laatste refresh: {otk_time.strftime('%Y-%m-%d %H:%M UTC')}" if otk_time else ""
-    st.caption(f"Gevonden kwaliteiten: {', '.join(sorted(otk.keys()))}.  {tail}")
-else:
-    st.info("Nog geen waarden beschikbaar. Klik op **📡 Ophalen** of probeer later opnieuw.")
+# Output tonen
+show_cols = ["material_id","grade","en_number","category","form","price_eur_per_kg","price_source","source_date","scrap_pct","yield_loss_pct"]
+exists = [c for c in show_cols if c in materials_df.columns]
+st.dataframe(materials_df[exists], use_container_width=True)
 
-# Rekenhulp RVS
-st.markdown("#### RVS rekenhulp (€/kg)")
-rv_cols = st.columns([2, 1, 1])
+# Download resolved
+st.download_button(
+    "⬇️ Export: materials_resolved.csv",
+    data=materials_df.to_csv(index=False).encode("utf-8"),
+    file_name="materials_resolved.csv",
+    mime="text/csv"
+)
 
-rvs_keys = [m for m, v in MATERIALS.items() if v.get("kind") == "stainless"]
-
-with rv_cols[0]:
-    if rvs_keys:
-        sel_rvs = st.selectbox("RVS kwaliteit", rvs_keys, index=0, key="sel_rvs_grade")
-    else:
-        st.warning("Geen RVS-materialen gevonden in MATERIALS.")
-        sel_rvs = None
-
-with rv_cols[1]:
-    base = MATERIALS.get(sel_rvs, {}).get("base_eurkg", 0.0) if sel_rvs else 0.0
-    st.metric("Base €/kg", f"{base:.3f}")
-
-with rv_cols[2]:
-    ref = OTK_KEY.get(sel_rvs, "") if sel_rvs else ""
-    sur_ton = (otk or {}).get(ref)
-    sur_kg = eurton(sur_ton) if sur_ton else 0.0
-    st.metric("Surcharge €/kg", f"{sur_kg:.3f}")
-
-st.success(f"**Indicatieve materiaalprijs {sel_rvs or '—'}: € {(base + (sur_kg or 0.0)):.3f}/kg**")
-
-st.divider()
-
-# =========================
-# B) LME Aluminium
-# =========================
-st.subheader("LME Aluminium (€/ton)")
-
-lme_cols = st.columns(4)
-with lme_cols[0]:
-    if st.button("🔄 Refresh LME cache (hard)", key="lme_refresh"):
-        if clear_cache_for(fetch_lme_eur_ton):
-            st.success("LME-cache geleegd. Klik op ‘Ophalen’.")
-        else:
-            st.info("Geen cache op fetch_lme_eur_ton gevonden (of al leeg).")
-with lme_cols[1]:
-    lme_go = st.button("📡 Ophalen", key="lme_fetch")
-
-if lme_go:
-    st.session_state["_lme_last"] = dt.datetime.utcnow()
-
-lme_time = st.session_state.get("_lme_last")
-lme_val, lme_src = (None, "n/a")
-
-try:
-    if lme_go or ("_lme_cached" not in st.session_state):
-        lme_val, lme_src = fetch_lme_eur_ton()
-        st.session_state["_lme_cached"] = (lme_val, lme_src)
-    else:
-        lme_val, lme_src = st.session_state["_lme_cached"]
-except Exception:
-    st.error("Fout bij ophalen LME.")
-    if DEBUG:
-        st.code("".join(_tb.format_exc()))
-
-met_cols = st.columns([1, 1, 2])
-with met_cols[0]:
-    st.metric("LME €/ton", f"{lme_val:.0f}" if lme_val else "—")
-with met_cols[1]:
-    st.caption(lme_src or "—")
-with met_cols[2]:
-    st.caption(f"{'Laatste refresh: ' + lme_time.strftime('%Y-%m-%d %H:%M UTC') if lme_time else ''}")
-
-st.markdown("#### Alu prijs (€/kg) met premie & conversie")
-p1, p2, p3, p4 = st.columns(4)
-with p1:
-    lme_ton_manual = st.number_input(
-        "LME (€/ton, override)", 0.0, 100000.0, float(lme_val or 2200.0), 10.0, key="lme_override"
-    )
-with p2:
-    prem = st.number_input("Regiopremie (€/kg)", 0.0, 10.0, 0.25, 0.01, key="alu_prem")
-with p3:
-    conv_add = st.number_input("Conversie-opslag (€/kg)", 0.0, 10.0, 0.40, 0.01, key="alu_conv")
-with p4:
-    calc = eurton(lme_ton_manual) + prem + conv_add
-    st.metric("Indicatieve €/kg", f"{calc:.3f}")
-
-st.divider()
-
-# =========================
-# C) Diagnose & tips
-# =========================
-with st.expander("🔍 Diagnose & tips"):
-    st.write("""
-- **Bronnen**  
-  - Outokumpu: publiek surcharges-overzicht (HTML). Parser zoekt naar bekende grade-labels (304/316L/2205/2507/904L) en bedragen met `€` of `€/t`.  
-  - LME: commodity-pagina; parser pakt de koers en rekent zo nodig naar EUR/ton in `shared.py`.
-- **Actualiteit**  
-  - OTK-cache: typisch een paar uur. LME-cache: ±30 min. Via de **Refresh**-knoppen maak je de cache leeg.
-- **Validatie**  
-  - Vergelijk waarden handmatig met leveranciersquotes. “Surcharge €/kg” = `€/ton / 1000`.
-- **Fallback**  
-  - Als scraping faalt, gebruik de manual invoervelden in **Calculatie** (OTK of LME override).
-""")
+st.caption("Tip: wil je volledig schema? Gebruik materials_db.csv (nieuw).")
