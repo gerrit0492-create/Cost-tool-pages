@@ -1,10 +1,17 @@
-# pages/16_Routing_Kosten.py  (v2: veilige BOM-load, duplex-dichtheid, slimme tariefmapping)
+# pages/16_Routing_Kosten.py
+# Volledige, robuuste versie:
+# - Veilige BOM-inleeslogica (duidelijke foutmeldingen)
+# - Duplex-dichtheid (1.4462) automatisch herkend
+# - Slimme tariefmapping (laser/bend/TIG/CNC_mill/CNC_turn/taper_turn/drill_bore/deburr)
+# - Robuuste tabelweergave (geen KeyError bij ontbrekende kolommen)
+# - CSV-download van de schone tabel
+
 import os, json, math
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Routing & Kosten", page_icon="🛠️", layout="wide")
-st.title("🛠️ Routing & kosten (v2) — duplex aware + veilige BOM-inleeslogica")
+st.title("🛠️ Routing & kosten (v3) — duplex aware + veilige BOM")
 
 # ---------- Helpers
 DENSITY_KG_PER_MM3 = {
@@ -46,9 +53,9 @@ def midpoint_rate(df_rates, process_kw, country="Netherlands"):
     if df_rates.empty:
         return None
     d = df_rates.copy()
-    d = d[d["process"].astype(str).str.lower().str.contains(process_kw.lower())]
+    d = d[d["process"].astype(str).str.lower().str.contains(str(process_kw).lower())]
     if not d.empty:
-        d2 = d[d["country"].astype(str).str.lower() == country.lower()]
+        d2 = d[d["country"].astype(str).str.lower() == str(country).lower()]
         if not d2.empty:
             d = d2
     if d.empty:
@@ -73,7 +80,7 @@ def map_rate_for_process(df_rates, proc_name: str):
         "drill_bore": ["drill", "deep drill", "boren", "gun drill", "drill bore"],
         "deburr": ["deburr", "afbramen"]
     }
-    # probeer directe/synoniem hits, met mapping naar dichtstbijzijnde algemene categorie
+    # directe/synoniem hits met mapping naar dichtbij algemene categorie
     for key, kws in direct_map.items():
         if p == key or any(p == k or p in k for k in kws):
             if key == "laser":
@@ -121,12 +128,12 @@ def mass_kg(part):
     W = part.get("width_mm") or 0
     dia = part.get("diameter_mm") or 0
 
-    if form in ("sheet", "plate"):
+    if form in ("sheet", "plate") and t and L and W:
         vol = float(t) * float(L) * float(W)  # mm^3
     elif form in ("bar", "staf", "round", "rod") and dia and L:
         vol = math.pi * (float(dia)/2)**2 * float(L)
     else:
-        vol = float(t) * float(L) * float(W)
+        vol = float(t or 0) * float(L or 0) * float(W or 0)
 
     return 0.0 if vol <= 0 else vol * rho  # kg
 
@@ -184,8 +191,8 @@ for p in bom:
     rows.append({
         "item_code": item,
         "qty": qty,
-        "material_family": fam,
         "grade": grade,
+        "material_family": fam,
         "mass_kg_per_pc": round(m_kg, 4),
         "eur_per_kg": round(eurkg, 4),
         "Material €/pc": round(mat_eur_pc, 2),
@@ -196,25 +203,53 @@ for p in bom:
 
 df = pd.DataFrame(rows)
 
-# ---------- Weergave
+# ---------- Weergave (robuust)
 st.subheader("Per item")
-df_display = df[["item_code","qty","grade","material_family","mass_kg_per_pc","eur_per_kg","Material €/pc","Proc €/pc","Total €/pc"]].copy()
+
+expected_cols = [
+    "item_code","qty","grade","material_family",
+    "mass_kg_per_pc","eur_per_kg","Material €/pc","Proc €/pc","Total €/pc"
+]
+for col in expected_cols:
+    if col not in df.columns:
+        df[col] = pd.NA
+
+if df.empty:
+    st.warning("Geen regels om te tonen. Controleer je BOM in **15_Bom_Import** en sla opnieuw op.")
+    st.stop()
+
+df_display = df[expected_cols].copy()
 st.dataframe(df_display, use_container_width=True)
 
-tot_value = float((df["Total €/pc"] * df["qty"]).sum()) if not df.empty else 0.0
+# Totale waarde veilig berekenen
+try:
+    tot_value = float(
+        pd.to_numeric(df["Total €/pc"], errors="coerce").fillna(0) *
+        pd.to_numeric(df["qty"], errors="coerce").fillna(0)
+    .sum())
+except Exception:
+    tot_value = 0.0
+
 st.success(f"🌟 Totale waarde (qty × Total €/pc): € {tot_value:,.2f}")
 
 with st.expander("Procesdetails (per item)"):
-    for r in rows:
-        st.markdown(f"**{r['item_code']}** — {r['Processes'] or '_geen procesregels_'}")
+    if "Processes" in df.columns and df["Processes"].notna().any():
+        for _, r in df.iterrows():
+            st.markdown(f"**{r['item_code']}** — {r['Processes'] or '_geen procesregels_'}")
+    else:
+        st.markdown("_Geen procesregels beschikbaar._")
 
 # ---------- Hints / waarschuwingen
-missing_prices = [r["grade"] for r in rows if r["eur_per_kg"] == 0.0]
-if missing_prices:
-    st.warning("Geen €/kg gevonden voor: " + ", ".join(sorted(set(missing_prices))) +
-               ". Voeg regels toe in material_prices.csv met region='EU' en unit='€/kg' (en juiste grade).")
+if "eur_per_kg" in df.columns:
+    mask = df["eur_per_kg"].isna() | (pd.to_numeric(df["eur_per_kg"], errors="coerce").fillna(0) == 0)
+    missing_prices = df.loc[mask, "grade"].dropna().astype(str).tolist()
+    if missing_prices:
+        st.warning(
+            "Geen €/kg gevonden voor: " + ", ".join(sorted(set(missing_prices))) +
+            ". Voeg regels toe in **material_prices.csv** met `region='EU'` en `unit='€/kg'` (en juiste `grade`)."
+        )
 
-# ---------- Download
+# ---------- Download (schone tabel)
 st.download_button(
     "⬇️ Download resultaten (CSV)",
     df_display.to_csv(index=False),
