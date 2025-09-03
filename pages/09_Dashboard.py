@@ -1,4 +1,6 @@
 # bovenin elk .py bestand
+from bootstrap import configure_page, init_state
+configure_page(); init_state()
 import streamlit as st, traceback
 
 def guard(run):
