@@ -1,10 +1,9 @@
 # utils/shared.py
-# Centrale "shared" helpers + backwards compatibility shims
-# zodat oude pages met MATERIALS/PROCESSES/BOM blijven werken.
+# Centrale helpers + backwards-compat voor oude imports.
 
 from __future__ import annotations
 
-# Probeer zoveel mogelijk door te leiden naar utils.io (en andere utils)
+# Probeer te leunen op utils.io (huidige bron van schema's & IO)
 try:
     from .io import (
         SCHEMA_MATERIALS,
@@ -14,7 +13,6 @@ try:
         paths,
     )
 except Exception:  # pragma: no cover
-    # Minimalistische no-op fallback zodat imports niet crashen
     SCHEMA_MATERIALS = {}
     SCHEMA_PROCESSES = {}
     SCHEMA_BOM = {}
@@ -33,21 +31,13 @@ except Exception:  # pragma: no cover
             "bom": p / "bom_template.csv",
         }
 
-# --- Backwards compatibility: oude namen mappen op nieuwe schema's ---
-# Oude code deed: from utils.shared import MATERIALS, PROCESSES, BOM
+# Backwards-compat: oude namen
 MATERIALS = SCHEMA_MATERIALS
 PROCESSES = SCHEMA_PROCESSES
 BOM = SCHEMA_BOM
 
 __all__ = [
-    # Nieuwe preferente exports
-    "SCHEMA_MATERIALS",
-    "SCHEMA_PROCESSES",
-    "SCHEMA_BOM",
-    "read_csv_safe",
-    "paths",
-    # Backwards compat
-    "MATERIALS",
-    "PROCESSES",
-    "BOM",
+    "SCHEMA_MATERIALS", "SCHEMA_PROCESSES", "SCHEMA_BOM",
+    "read_csv_safe", "paths",
+    "MATERIALS", "PROCESSES", "BOM",
 ]
