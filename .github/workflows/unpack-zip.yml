@@ -10,23 +10,63 @@ jobs:
   unpack:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout full history
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Install unzip
-        run: sudo apt-get install -y unzip
-      - name: Unpack ZIP
+
+      - name: Ensure unzip is available
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Find ZIP to unpack
+        id: findzip
+        shell: bash
         run: |
-          unzip -o Cost-tool-pages-clean.zip -d .
-          rm Cost-tool-pages-clean.zip
-      - name: Commit unpacked files
+          set -euo pipefail
+          if [[ -f "Cost-tool-pages-clean.zip" ]]; then
+            echo "zipfile=Cost-tool-pages-clean.zip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          zips=$(ls -1 *.zip 2>/dev/null || true)
+          if [[ -n "$zips" ]]; then
+            first=$(echo "$zips" | head -n1)
+            echo "zipfile=$first" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "No ZIP found in repo root" >&2
+          exit 1
+
+      - name: Rebase onto latest main (avoid non-fast-forward)
+        shell: bash
         run: |
+          set -euo pipefail
+          git fetch origin main
+          # zorg dat we bovenop de nieuwste main werken
+          git rebase origin/main || { echo "Rebase failed"; git rebase --abort; exit 1; }
+
+      - name: Unpack ZIP into repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Unzipping: ${{ steps.findzip.outputs.zipfile }}"
+          unzip -o "${{ steps.findzip.outputs.zipfile }}" -d .
+          rm -f "${{ steps.findzip.outputs.zipfile }}"
+
+      - name: Commit and push (with final rebase if race)
+        shell: bash
+        run: |
+          set -euo pipefail
           if [ -n "$(git status --porcelain)" ]; then
-            git config user.name "github-actions[bot]"
+            git config user.name  "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add -A
-            git commit -m "Unpack clean repo"
-            git push
+            git commit -m "chore: unpack clean repo"
+            # laatste check: als er tijdens de run nog iets naar main is gepusht, rebase en probeer opnieuw
+            for i in 1 2; do
+              git fetch origin main
+              git rebase origin/main || { git rebase --abort; break; }
+            done
+            git push origin HEAD:main
           else
             echo "Nothing to commit"
           fi
