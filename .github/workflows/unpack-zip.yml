@@ -2,6 +2,12 @@ name: Unpack Clean Repo
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
