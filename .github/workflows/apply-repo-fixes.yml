@@ -34,39 +34,3 @@ jobs:
           else
             echo "No changes"
           fi
-name: Apply Repo Fixes Auto
-
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  apply:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Run repo fixer
-        run: python scripts/auto_fix_repo.py
-
-      - name: Commit directly to main
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore: auto-apply repo fixes (shared, safe, imports, guards)"
-            git push origin HEAD:main
-          else
-            echo "No changes"
-          fi
