@@ -1,0 +1,8 @@
+process,country,rate_min,rate_max,currency,as_of_date,source_url,source_name,basis,notes
+CNC turning,Netherlands,120,180,EUR,2025-09-03,https://voorbeeld.local/turn,Interne benchmark,shop rate,Zware assen Ø>250 en L>2000
+taper_turn,Netherlands,140,210,EUR,2025-09-03,https://voorbeeld.local/taper,Interne benchmark,shop rate,Conisch draaien zware as
+drill_bore,Netherlands,130,200,EUR,2025-09-03,https://voorbeeld.local/deepdrill,Interne benchmark,shop rate,Diepboren/gun-drill lange assen
+CNC milling,Netherlands,75,120,EUR,2025-09-03,https://voorbeeld.local/mill,Interne benchmark,shop rate,Frezen opspanningen/fixtures
+laser,Netherlands,80,120,EUR,2025-09-03,https://voorbeeld.local/laser,Interne benchmark,shop rate,2D lasersnijden
+TIG welding,Netherlands,55,95,EUR,2025-09-03,https://voorbeeld.local/tig,Interne benchmark,shop rate,RVS/duplex laswerk
+deburr,Netherlands,45,70,EUR,2025-09-03,https://voorbeeld.local/deburr,Interne benchmark,shop rate,Afbramen/handmatig

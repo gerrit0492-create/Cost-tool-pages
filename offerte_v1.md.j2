@@ -1,0 +1,36 @@
+# Offer {{ project.code }} — {{ client.name }}
+**Date:** {{ project.date }}  
+**Contact:** {{ client.contact }} | {{ client.email }}
+
+## Scope
+Assembly: **{{ assembly.name }}**, quantity **{{ assembly.qty }}**.
+
+## Cost breakdown (per piece, EUR)
+| Item | Grade | Mass (kg/pc) | €/kg | Material €/pc | Proc €/pc | Total €/pc |
+|---|---|---:|---:|---:|---:|---:|
+{% for it in items -%}
+| {{ it.item_code }} | {{ it.grade }} | {{ "%.4f"|format(it.mass_kg_per_pc) }} | {{ "%.4f"|format(it.eur_per_kg) }} | {{ "%.2f"|format(it.material_eur_pc) }} | {{ "%.2f"|format(it.proc_eur_pc) }} | {{ "%.2f"|format(it.total_eur_pc) }} |
+{% endfor %}
+
+**Assembly total (qty × Total €/pc):** € {{ "%.2f"|format(totals.total_value) }}
+
+## Process detail
+{% for it in items -%}
+### {{ it.item_code }}
+{% if it.proc_detail|length == 0 -%}
+_No process cost lines._
+{% else -%}
+| Process | Rate (€/min) | Minutes | Cost €/pc |
+|---|---:|---:|---:|
+{% for p in it.proc_detail -%}
+| {{ p.proc }} | {{ "%.2f"|format(p.rate_eur_min) }} | {{ "%.2f"|format(p.minutes) }} | {{ "%.2f"|format(p.cost_eur) }} |
+{% endfor -%}
+{% endif -%}
+{% endfor -%}
+
+## Assumptions
+- Lead time: {{ assumptions.lead_time_weeks }} weeks after order.
+- Incoterms: {{ assumptions.incoterms }}.
+- Weld quality: EN ISO 5817 level {{ assumptions.weld_quality }}.
+- Scrap: {{ assumptions.scrap_pct }}.
+- Prices excl. VAT.
