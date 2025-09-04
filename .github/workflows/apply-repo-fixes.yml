@@ -21,7 +21,7 @@ jobs:
           python-version: "3.11"
 
       - name: Run repo fixer
-        run: python scripts/auto_fix_repo.py
+        run: python .github/workflows/Scripts/auto_fix_repo.py
 
       - name: Commit directly to main
         run: |
