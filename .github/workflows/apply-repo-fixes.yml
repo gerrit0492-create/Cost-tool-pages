@@ -1,17 +1,7 @@
-name: Apply Repo Fixes (no PR)
+name: Apply Repo Fixes (no PR, minimal)
 
 on:
   workflow_dispatch:
-    inputs:
-      mode:
-        description: Waar landen de wijzigingen?
-        type: choice
-        options: [branch, main]
-        default: branch
-      branch:
-        description: Branchnaam (bij mode=branch)
-        required: false
-        default: auto/repo-fixes
 
 permissions:
   contents: write
@@ -26,6 +16,7 @@ jobs:
           fetch-depth: 0
 
       - name: Write helper files (shared.py + safe.py + fixer)
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p utils .github/workflows/scripts
@@ -209,32 +200,18 @@ PY
         run: |
           python .github/workflows/scripts/auto_fix_repo.py || true
 
-      - name: Detect changes
-        id: changes
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Configure git
-        if: steps.changes.outputs.changed == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit to branch (safe default)
-        if: steps.changes.outputs.changed == 'true' && inputs.mode == 'branch'
+      - name: Commit to branch
         run: |
-          git checkout -B "${{ inputs.branch }}"
-          git add -A
-          git commit -m "chore: apply repo fixes (imports/guards/unicode) [no PR]"
-          git push -f -u origin "${{ inputs.branch }}"
-
-      - name: Commit to main (opt-in)
-        if: steps.changes.outputs.changed == 'true' && inputs.mode == 'main'
-        run: |
-          git add -A
-          git commit -m "chore: apply repo fixes (imports/guards/unicode) [no PR]"
-          git push origin HEAD:main
+          if [ -n "$(git status --porcelain)" ]; then
+            git checkout -B auto/repo-fixes
+            git add -A
+            git commit -m "chore: apply repo fixes (imports/guards/unicode) [no PR]"
+            git push -f -u origin auto/repo-fixes
+          else
+            echo "No changes to commit"
+          fi
