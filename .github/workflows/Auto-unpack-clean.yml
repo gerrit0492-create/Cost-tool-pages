@@ -1,0 +1,98 @@
+name: Auto Unpack & Clean (no-click after ZIP upload)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "*.zip"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure unzip is available
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Find ZIP to unpack
+        id: findzip
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f "Cost-tool-pages-auto-clean.zip" ]]; then
+            echo "zipfile=Cost-tool-pages-auto-clean.zip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          zips=$(ls -1 *.zip 2>/dev/null || true)
+          if [[ -n "$zips" ]]; then
+            first=$(echo "$zips" | head -n1)
+            echo "zipfile=$first" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "No ZIP found in repo root" >&2
+          exit 1
+
+      - name: Unpack ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Unzipping: ${{ steps.findzip.outputs.zipfile }}"
+          unzip -o "${{ steps.findzip.outputs.zipfile }}" -d .
+          rm -f "${{ steps.findzip.outputs.zipfile }}"
+          git status --porcelain
+
+      - name: Clean repo (allowlist)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ALLOW=(
+            ".github"
+            ".github/workflows"
+            ".github/workflows/auto-unpack-clean.yml"
+            ".streamlit"
+            ".streamlit/secrets.toml"
+            "README.md"
+            "utils" "utils/shared.py" "utils/safe.py"
+            "pages"
+            "data" "data/materials_db.csv" "data/processes_db.csv" "data/bom_template.csv"
+          )
+          git ls-files > all.txt
+          printf "%s\n" "${ALLOW[@]}" | sed 's/[].[^$\/\\*]/\\&/g' > allow.txt
+          while read -r f; do
+            keep=0
+            while read -r a; do
+              case "$f" in "$a"|"$a"/*) keep=1; break;; esac
+            done < allow.txt
+            if [ $keep -eq 0 ]; then git rm -qf "$f" || true; fi
+          done < all.txt
+
+      - name: Commit and push with fallback branch
+        id: push
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore: auto-unpack and clean"
+            if git push origin HEAD:main; then
+              echo "✅ Pushed directly to main" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            BR="auto/unpack-clean-$(date +%Y%m%d-%H%M%S)"
+            git push -u origin HEAD:"$BR"
+            echo "⚠️ main updated meanwhile; pushed to ${BR}" >> "$GITHUB_STEP_SUMMARY"
+            echo "https://github.com/${REPO}/compare/main...${BR}?expand=1" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Nothing to commit"
