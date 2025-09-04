@@ -1,9 +1,7 @@
 # utils/shared.py
-# Centrale helpers + backwards-compat voor oude imports.
-
 from __future__ import annotations
 
-# Probeer te leunen op utils.io (huidige bron van schema's & IO)
+# Re-export vanuit utils.io om oude en nieuwe imports te verenigen
 try:
     from .io import (
         SCHEMA_MATERIALS,
@@ -11,33 +9,37 @@ try:
         SCHEMA_BOM,
         read_csv_safe,
         paths,
+        load_materials,
+        load_processes,
+        load_bom,
     )
-except Exception:  # pragma: no cover
+except Exception:
+    # Fallbacks (repo blijft starten, maar zonder data)
     SCHEMA_MATERIALS = {}
     SCHEMA_PROCESSES = {}
     SCHEMA_BOM = {}
-
-    def read_csv_safe(*args, **kwargs):
-        return None
-
+    def read_csv_safe(*args, **kwargs): return None
     def paths():
         from pathlib import Path
-        p = Path("data")
+        d = Path("data")
         return {
-            "root": Path("."),
-            "data": p,
-            "materials": p / "materials_db.csv",
-            "processes": p / "processes_db.csv",
-            "bom": p / "bom_template.csv",
+            "root": Path("."), "data": d,
+            "materials": d / "materials_db.csv",
+            "processes": d / "processes_db.csv",
+            "bom": d / "bom_template.csv",
         }
+    def load_materials(): return None
+    def load_processes(): return None
+    def load_bom(): return None
 
-# Backwards-compat: oude namen
+# Backward-compat aliases die elders gebruikt worden
 MATERIALS = SCHEMA_MATERIALS
 PROCESSES = SCHEMA_PROCESSES
 BOM = SCHEMA_BOM
 
 __all__ = [
     "SCHEMA_MATERIALS", "SCHEMA_PROCESSES", "SCHEMA_BOM",
-    "read_csv_safe", "paths",
     "MATERIALS", "PROCESSES", "BOM",
+    "read_csv_safe", "paths",
+    "load_materials", "load_processes", "load_bom",
 ]
