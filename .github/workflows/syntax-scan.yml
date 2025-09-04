@@ -1,0 +1,26 @@
+name: Syntax Scan
+on: { workflow_dispatch: {} }
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13' }   # zelfde als jouw omgeving
+      - name: Compile all .py files
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          root = pathlib.Path(".")
+          bad = 0
+          for p in sorted(root.rglob("*.py")):
+            try:
+              compile(p.read_text(encoding="utf-8"), str(p), "exec")
+            except SyntaxError as e:
+              bad += 1
+              print(f"SYNTAX ERROR in {p}:{e.lineno}:{e.offset} -> {e.msg}")
+              if e.text: print(e.text.rstrip())
+          if bad:
+            print(f"\n{bad} syntax error(s) found"); sys.exit(1)
+          print("All good ✅")
+          PY
