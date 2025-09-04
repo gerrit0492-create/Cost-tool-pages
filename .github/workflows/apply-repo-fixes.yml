@@ -1,0 +1,71 @@
+name: Apply Repo Fixes (no PR)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Waar landen de wijzigingen?
+        type: choice
+        options: [branch, main]
+        default: branch
+      branch:
+        description: Branchnaam (bij mode=branch)
+        required: false
+        default: auto/repo-fixes
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Write helper files (shared.py + safe.py + fixer)
+        run: |
+          mkdir -p utils .github/workflows/scripts
+          cat > utils/shared.py <<'PY'
+# (inhoud zie sectie 1 hierboven)
+PY
+          cat > utils/safe.py <<'PY'
+# (inhoud zie sectie 2 hierboven)
+PY
+          cat > .github/workflows/scripts/auto_fix_repo.py <<'PY'
+# (inhoud zie sectie 3 hierboven)
+PY
+
+      - name: Run auto-fixer
+        run: |
+          python .github/workflows/scripts/auto_fix_repo.py || true
+
+      - name: Detect changes
+        id: changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure git
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit to branch (safe default)
+        if: steps.changes.outputs.changed == 'true' && inputs.mode == 'branch'
+        run: |
+          git checkout -B "${{ inputs.branch }}"
+          git add -A
+          git commit -m "chore: apply repo fixes (imports/guards/unicode) [no PR]"
+          git push -f -u origin "${{ inputs.branch }}"
+
+      - name: Commit to main (opt-in)
+        if: steps.changes.outputs.changed == 'true' && inputs.mode == 'main'
+        run: |
+          git add -A
+          git commit -m "chore: apply repo fixes (imports/guards/unicode) [no PR]"
+          git push origin HEAD:main
