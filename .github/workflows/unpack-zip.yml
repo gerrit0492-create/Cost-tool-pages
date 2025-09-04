@@ -66,14 +66,14 @@ jobs:
             git add -A
             git commit -m "chore: unpack clean repo"
 
-            # Probeer eerst netjes naar main te pushen
+            # Try to push directly to main
             if git push origin HEAD:main; then
               echo "pushed_to=main" >> "$GITHUB_OUTPUT"
               echo "✅ Pushed directly to main" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
 
-            # Fallback: push naar unieke branch en geef merge-link
+            # Fallback: push to a unique branch and provide merge link
             BR="auto/unpack-$(date +%Y%m%d-%H%M%S)"
             git push -u origin HEAD:"$BR"
             echo "pushed_to=$BR" >> "$GITHUB_OUTPUT"
