@@ -1,4 +1,4 @@
-name: Apply Repo Fixes (no PR, minimal)
+name: Apply Repo Fixes (final)
 
 on:
   workflow_dispatch:
@@ -15,203 +15,84 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Write helper files (shared.py + safe.py + fixer)
-        shell: bash
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create fixer script
         run: |
-          set -euo pipefail
-          mkdir -p utils .github/workflows/scripts
-
-          cat > utils/shared.py <<'PY'
-from __future__ import annotations
-
-# Probeer te leunen op utils.io (huidige bron van schema's & IO)
-try:
-    from .io import (
-        SCHEMA_MATERIALS,
-        SCHEMA_PROCESSES,
-        SCHEMA_BOM,
-        read_csv_safe,
-        paths,
-    )
-except Exception:  # pragma: no cover
-    SCHEMA_MATERIALS = {}
-    SCHEMA_PROCESSES = {}
-    SCHEMA_BOM = {}
-
-    def read_csv_safe(*args, **kwargs):
-        return None
-
-    def paths():
-        from pathlib import Path
-        p = Path("data")
-        return {
-            "root": Path("."),
-            "data": p,
-            "materials": p / "materials_db.csv",
-            "processes": p / "processes_db.csv",
-            "bom": p / "bom_template.csv",
-        }
-
-# Backwards-compat: oude namen
-MATERIALS = SCHEMA_MATERIALS
-PROCESSES = SCHEMA_PROCESSES
-BOM = SCHEMA_BOM
-
-__all__ = [
-    "SCHEMA_MATERIALS", "SCHEMA_PROCESSES", "SCHEMA_BOM",
-    "read_csv_safe", "paths",
-    "MATERIALS", "PROCESSES", "BOM",
-]
-PY
-
-          cat > utils/safe.py <<'PY'
-from __future__ import annotations
-import streamlit as st
-from typing import Callable, Any
-
-def run_safely(label: str, fn: Callable[..., Any], *args, **kwargs):
-    """Voer een functie uit en toon nette foutmeldingen in Streamlit i.p.v. hard crashen."""
-    try:
-        return fn(*args, **kwargs)
-    except Exception as e:
-        st.error(f"{label} faalde: {type(e).__name__}: {e}")
-        return None
-
-def guard(fn: Callable[[], Any]) -> None:
-    """Voorkom dat een page de hele app breekt."""
-    try:
-        fn()
-    except Exception as e:
-        st.error(f"Deze page kon niet starten: {type(e).__name__}: {e}")
-        st.stop()
-PY
-
-          cat > .github/workflows/scripts/auto_fix_repo.py <<'PY'
-from __future__ import annotations
+          mkdir -p .github/workflows/scripts
+          echo "from __future__ import annotations
 import pathlib as pl, re
 
-ROOT = pl.Path(".")
-PAGES = ROOT / "pages"
+ROOT = pl.Path('.')
+PAGES = ROOT / 'pages'
 
-# Oude imports -> nieuwe (utils.io)
-IMPORT_OLD = re.compile(r"from\s+utils\.shared\s+import\s+([^\n]+)")
-RENAME_MAP = {
-    "MATERIALS": "SCHEMA_MATERIALS",
-    "PROCESSES": "SCHEMA_PROCESSES",
-    "BOM": "SCHEMA_BOM",
-}
+IMPORT_OLD = re.compile(r'from\\s+utils\\.shared\\s+import\\s+([^\\n]+)')
+RENAME_MAP = {'MATERIALS':'SCHEMA_MATERIALS','PROCESSES':'SCHEMA_PROCESSES','BOM':'SCHEMA_BOM'}
+HAS_GUARD = re.compile(r'\\bguard\\s*\\(\\s*main\\s*\\)\\s*$', re.M)
+UNICODE_FIXES = {'Δ':'delta_','–':'-','—':'-','’':'\\'','“':'\"','”':'\"','•':'-'}
 
-# guard(main) detectie
-HAS_GUARD = re.compile(r"\bguard\s*\(\s*main\s*\)\s*$", re.M)
-
-# Unicode fixes
-UNICODE_FIXES = {
-    "Δ": "delta_",
-    "–": "-",
-    "—": "-",
-    "’": "'",
-    "“": '"',
-    "”": '"',
-    "•": "-",
-}
-
-def normalize_unicode(s: str) -> str:
-    for bad, good in UNICODE_FIXES.items():
-        s = s.replace(bad, good)
+def normalize_unicode(s): 
+    for b,g in UNICODE_FIXES.items(): s=s.replace(b,g)
     return s
 
-def fix_imports(src: str) -> str:
-    if "from utils.io import" in src:
-        return src
-    m = IMPORT_OLD.search(src)
-    if not m:
-        return src
-    items = [i.strip() for i in m.group(1).split(",")]
-    mapped, passthrough = [], []
+def fix_imports(src):
+    if 'from utils.io import' in src: return src
+    m=IMPORT_OLD.search(src)
+    if not m: return src
+    items=[i.strip() for i in m.group(1).split(',')]
+    mapped=[]; passthrough=[]
     for it in items:
-        name = it.split(" as ")[0].strip()
-        if name in RENAME_MAP:
-            mapped.append(f"{RENAME_MAP[name]} as {name}")
-        elif name in ("read_csv_safe", "paths"):
-            passthrough.append(name)
-
-    blocks = []
-    if mapped or passthrough:
-        imp = []
-        if mapped: imp.extend(mapped)
-        if passthrough: imp.extend(passthrough)
-        blocks.append("from utils.io import (\n    " + ",\n    ".join(imp) + "\n)")
-    src = IMPORT_OLD.sub("\n".join(blocks) if blocks else "", src)
+        n=it.split(' as ')[0].strip()
+        if n in RENAME_MAP: mapped.append(f\"{RENAME_MAP[n]} as {n}\")
+        elif n in ('read_csv_safe','paths'): passthrough.append(n)
+    imp=[]
+    if mapped: imp.extend(mapped)
+    if passthrough: imp.extend(passthrough)
+    if imp: src=IMPORT_OLD.sub('from utils.io import '+', '.join(imp), src)
     return src
 
-def ensure_guard(src: str) -> str:
-    if "def main(" not in src:
-        return src
-    if HAS_GUARD.search(src):
-        return src
-    if "from utils.safe import guard" not in src and "import utils.safe" not in src:
-        lines = src.splitlines()
-        inserted = False
-        for i, line in enumerate(lines[:30]):
-            if line.startswith("import streamlit") or line.startswith("from bootstrap"):
-                lines.insert(i+1, "from utils.safe import guard")
-                inserted = True
-                break
-        if not inserted:
-            lines.insert(0, "from utils.safe import guard")
-        src = "\n".join(lines)
-    if src.endswith("\n"):
-        return src + "\n\nguard(main)\n"
-    else:
-        return src + "\n\nguard(main)\n"
+def ensure_guard(src):
+    if 'def main(' not in src: return src
+    if HAS_GUARD.search(src): return src
+    if 'from utils.safe import guard' not in src:
+        src='from utils.safe import guard\\n'+src
+    return src+'\\n\\nguard(main)\\n'
 
-def process_file(p: pl.Path) -> bool:
-    original = p.read_text(encoding="utf-8")
-    s = original
-    s = normalize_unicode(s)
-    s = fix_imports(s)
-    s = ensure_guard(s)
-    if s != original:
-        p.write_text(s, encoding="utf-8")
-        return True
+def process_file(p):
+    t=p.read_text(encoding='utf-8')
+    s=normalize_unicode(t)
+    s=fix_imports(s)
+    s=ensure_guard(s)
+    if s!=t: p.write_text(s,encoding='utf-8'); return True
     return False
 
 def main():
-    changed = 0
-    if not PAGES.exists():
-        print("No pages/ dir; nothing to do.")
-        return
-    for p in sorted(PAGES.glob("*.py")):
-        if p.name.startswith(("98_", "99_")):
-            continue
+    ch=0
+    if not PAGES.exists(): return
+    for p in PAGES.glob('*.py'):
+        if p.name.startswith(('98_','99_')): continue
         try:
-            if process_file(p):
-                print(f"Fixed: {p}")
-                changed += 1
-        except Exception as e:
-            print(f"Skip {p}: {e}")
-    print(f"Done. Files changed: {changed}")
+            if process_file(p): print('Fixed',p); ch+=1
+        except Exception as e: print('Skip',p,e)
+    print('Changed',ch,'files')
 
-if __name__ == "__main__":
-    main()
-PY
+if __name__=='__main__': main()" > .github/workflows/scripts/auto_fix_repo.py
 
-      - name: Run auto-fixer
-        run: |
-          python .github/workflows/scripts/auto_fix_repo.py || true
+      - name: Run fixer
+        run: python .github/workflows/scripts/auto_fix_repo.py
 
-      - name: Configure git
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Commit to branch
+      - name: Commit changes
         run: |
           if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git checkout -B auto/repo-fixes
             git add -A
-            git commit -m "chore: apply repo fixes (imports/guards/unicode) [no PR]"
+            git commit -m "chore: apply repo fixes [final]"
             git push -f -u origin auto/repo-fixes
           else
-            echo "No changes to commit"
+            echo "No changes"
           fi
