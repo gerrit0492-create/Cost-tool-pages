@@ -1,0 +1,667 @@
+name: Bootstrap + Smoke (Cost Forge)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Prepare folders
+        run: mkdir -p utils pages data templates .streamlit tools
+
+      - name: Core files
+        run: |
+          cat > README.md <<'EOF'
+          # Cost Forge 2.3 — Full + Legacy
+          - Quick Cost (beste quotes), Data Quality, Scenario Planner
+          - Supplier Quotes, DOCX/PDF export, Download Center
+          - Legacy paginas (compat wrappers) uit vorige repo
+          Start: `home.py`
+          EOF
+
+          cat > requirements.txt <<'EOF'
+          streamlit>=1.36
+          pandas>=2.2
+          python-docx>=1.1.0
+          reportlab>=4.1
+          ruff>=0.5
+          EOF
+
+          cat > .gitignore <<'EOF'
+          __pycache__/
+          .venv/
+          venv/
+          *.py[cod]
+          .DS_Store
+          Thumbs.db
+          .cache/
+          *.zip
+          EOF
+
+          cat > home.py <<'PY'
+          import streamlit as st
+          st.set_page_config(page_title="Cost Forge 2.3", layout="wide")
+          st.title("🛠️ Cost Forge 2.3")
+          st.write("Quick Cost, Data Quality, Scenario Planner, Supplier Quotes, DOCX/PDF Export, Download Center + Legacy pagina's")
+          PY
+
+      - name: Utils (core)
+        run: |
+          cat > utils/safe.py <<'PY'
+          import streamlit as st
+          def guard(fn):
+              try: fn()
+              except Exception as e:
+                  st.error(f"{type(e).__name__}: {e}")
+                  st.stop()
+          PY
+
+          cat > utils/io.py <<'PY'
+          from pathlib import Path
+          import pandas as pd
+          SCHEMA_MATERIALS={"material_id":"string","description":"string","price_eur_per_kg":"float64"}
+          SCHEMA_PROCESSES={"process_id":"string","machine_rate_eur_h":"float64","labor_rate_eur_h":"float64","overhead_pct":"float64","margin_pct":"float64"}
+          SCHEMA_BOM={"line_id":"string","material_id":"string","qty":"Int64","mass_kg":"float64","process_route":"string","runtime_h":"float64"}
+          SCHEMA_QUOTES={"supplier":"string","material_id":"string","price_eur_per_kg":"float64","lead_time_days":"Int64","valid_until":"string","preferred":"Int64"}
+          def paths():
+              d=Path("data")
+              return {"materials":d/"materials_db.csv","processes":d/"processes_db.csv","bom":d/"bom_template.csv","quotes":d/"supplier_quotes.csv"}
+          def _read_csv(p, schema=None):
+              if schema is None: return pd.read_csv(p)
+              dtypes={k:v for k,v in schema.items() if v!="Int64"}
+              df=pd.read_csv(p,dtype=dtypes)
+              for c,t in schema.items():
+                  if t=="Int64" and c in df.columns: df[c]=df[c].astype("Int64")
+              return df
+          def load_materials(): return _read_csv(paths()["materials"],SCHEMA_MATERIALS)
+          def load_processes(): return _read_csv(paths()["processes"],SCHEMA_PROCESSES)
+          def load_bom(): return _read_csv(paths()["bom"],SCHEMA_BOM)
+          def load_quotes(): return _read_csv(paths()["quotes"],SCHEMA_QUOTES)
+          PY
+
+          cat > utils/pricing.py <<'PY'
+          import pandas as pd
+          def compute_costs(mats, procs, bom):
+              df=bom.merge(mats,on="material_id",how="left").merge(procs,left_on="process_route",right_on="process_id",how="left")
+              req=["mass_kg","price_eur_per_kg","runtime_h","machine_rate_eur_h","labor_rate_eur_h","overhead_pct","margin_pct"]
+              miss=[c for c in req if c not in df.columns]
+              if miss: raise ValueError(f"Ontbrekende kolommen: {miss}")
+              df["material_cost"]=df["mass_kg"]*df["price_eur_per_kg"]
+              df["process_cost"]=df["runtime_h"]*(df["machine_rate_eur_h"]+df["labor_rate_eur_h"])
+              df["overhead"]=(df["material_cost"]+df["process_cost"])*df["overhead_pct"]
+              df["base_cost"]=df["material_cost"]+df["process_cost"]+df["overhead"]
+              df["margin"]=df["base_cost"]*df["margin_pct"]
+              df["total_cost"]=df["base_cost"]+df["margin"]
+              return df
+          PY
+
+          cat > utils/quotes.py <<'PY'
+          import pandas as pd
+          def best_quotes(quotes):
+              q=quotes.copy()
+              q["preferred"]=q.get("preferred",0)
+              q["lead_time_days"]=q.get("lead_time_days",999999)
+              q=q.sort_values(by=["material_id","preferred","price_eur_per_kg","lead_time_days"],ascending=[True,False,True,True])
+              return q.groupby("material_id").head(1).reset_index(drop=True)
+          def apply_best_quotes(materials, quotes):
+              best=best_quotes(quotes)
+              m=materials.copy()
+              m=m.drop(columns=["price_eur_per_kg"],errors="ignore")\
+                 .merge(best[["material_id","price_eur_per_kg","supplier","lead_time_days"]],on="material_id",how="left")
+              m=m.rename(columns={"price_eur_per_kg":"price_eur_per_kg_from_quote"})
+              if "price_eur_per_kg" not in m.columns:
+                  m["price_eur_per_kg"]=m["price_eur_per_kg_from_quote"]
+              else:
+                  m["price_eur_per_kg"]=m["price_eur_per_kg"].fillna(m["price_eur_per_kg_from_quote"])
+              return m
+          def join_with_materials(materials, best):
+              return materials.drop(columns=["price_eur_per_kg"],errors="ignore")\
+                              .merge(best[["material_id","supplier","price_eur_per_kg","lead_time_days"]],on="material_id",how="left")
+          PY
+
+          cat > utils/docx_export.py <<'PY'
+          from io import BytesIO
+          from docx import Document
+          from docx.enum.text import WD_ALIGN_PARAGRAPH
+          def make_offer_docx(df, title="Offerte")->bytes:
+              doc=Document()
+              h=doc.add_heading(title,0); h.alignment=WD_ALIGN_PARAGRAPH.LEFT
+              p=doc.add_paragraph("Totaalprijs: "); p.add_run(f"EUR {df['total_cost'].sum():,.2f}").bold=True
+              table=doc.add_table(rows=1, cols=7); hdr=table.rows[0].cells
+              for i,t in enumerate(["Line","Material","Qty","Mat. cost","Proc. cost","Overhead","Total"]): hdr[i].text=t
+              for _,r in df.iterrows():
+                  row=table.add_row().cells
+                  row[0].text=str(r.get("line_id","")); row[1].text=str(r.get("material_id",""))
+                  row[2].text=str(r.get("qty","")); row[3].text=f"{r.get('material_cost',0):,.2f}"
+                  row[4].text=f"{r.get('process_cost',0):,.2f}"; row[5].text=f"{r.get('overhead',0):,.2f}"
+                  row[6].text=f"{r.get('total_cost',0):,.2f}"
+              bio=BytesIO(); doc.save(bio); return bio.getvalue()
+          PY
+
+          cat > utils/pdf_export.py <<'PY'
+          from io import BytesIO
+          from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+          from reportlab.lib.styles import getSampleStyleSheet
+          from reportlab.lib.pagesizes import A4
+          from reportlab.lib import colors
+          def make_offer_pdf(df, title="Offerte")->bytes:
+              buf=BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4)
+              styles=getSampleStyleSheet(); story=[]
+              story.append(Paragraph(f"<b>{title}</b>",styles["Title"])); story.append(Spacer(1,12))
+              story.append(Paragraph(f"Totaalprijs: <b>EUR {df['total_cost'].sum():,.2f}</b>",styles["Normal"]))
+              headers=["Line","Material","Qty","Mat. cost","Proc. cost","Overhead","Total"]
+              rows=[[str(r.get(c,"")) for c in ["line_id","material_id","qty","material_cost","process_cost","overhead","total_cost"]] for _,r in df.iterrows()]
+              data=[headers]+rows
+              t=Table(data); t.setStyle(TableStyle([
+                  ("GRID",(0,0),(-1,-1),0.5,colors.grey),
+                  ("BACKGROUND",(0,0),(-1,0),colors.lightgrey),
+                  ("ALIGN",(2,1),(-1,-1),"RIGHT")
+              ]))
+              story.append(t); doc.build(story); return buf.getvalue()
+          PY
+
+      - name: Utils (legacy/compat)
+        run: |
+          cat > utils/routing.py <<'PY'
+          import pandas as pd
+          def compute_routing_cost(bom: pd.DataFrame, routing: pd.DataFrame) -> pd.DataFrame:
+              df = bom.merge(routing, how="left", left_on="process_route", right_on="process_id")
+              df["routing_time_h"] = (df.get("time_h_per_unit",0)*df["qty"]).fillna(0) + df.get("setup_h",0).fillna(0)
+              return df
+          def routing_summary(df: pd.DataFrame) -> pd.DataFrame:
+              if "routing_time_h" not in df.columns:
+                  return pd.DataFrame(columns=["process_id","routing_time_h"])
+              return df.groupby("process_id", dropna=False)["routing_time_h"].sum().reset_index()
+          PY
+
+          cat > utils/presets.py <<'PY'
+          import json
+          from dataclasses import dataclass, asdict
+          from pathlib import Path
+          from typing import Dict
+          PRESETS_FILE = Path("data/presets.json")
+          @dataclass
+          class PricingPreset:
+              name: str
+              overhead_pct: float
+              margin_pct: float
+          DEFAULTS: Dict[str, PricingPreset] = {
+              "Standard": PricingPreset("Standard", 0.20, 0.10),
+              "Aggressive": PricingPreset("Aggressive", 0.15, 0.05),
+              "Premium": PricingPreset("Premium", 0.25, 0.15),
+          }
+          def load_presets() -> Dict[str, PricingPreset]:
+              if PRESETS_FILE.exists():
+                  data = json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
+                  return {k: PricingPreset(**v) for k, v in data.items()}
+              return DEFAULTS.copy()
+          def save_presets(presets: Dict[str, PricingPreset]) -> None:
+              PRESETS_FILE.write_text(json.dumps({k: asdict(v) for k,v in presets.items()}, indent=2), encoding="utf-8")
+          PY
+          test -f data/presets.json || echo "{}" > data/presets.json
+
+          cat > utils/market.py <<'PY'
+          import pandas as pd
+          from pathlib import Path
+          def load_market_csv(path):
+              p = Path(path)
+              if not p.exists():
+                  return pd.DataFrame(columns=["series","date","value"])
+              return pd.read_csv(p)
+          def yoy_change(df, series):
+              sub = df[df["series"] == series].sort_values("date")
+              if len(sub) < 13: return None
+              latest = pd.to_numeric(sub["value"].iloc[-1], errors="coerce")
+              prev   = pd.to_numeric(sub["value"].iloc[-13], errors="coerce")
+              if prev == 0 or pd.isna(prev) or pd.isna(latest): return None
+              return (latest - prev) / prev
+          PY
+
+          cat > utils/auto_fix.py <<'PY'
+          from pathlib import Path
+          import pandas as pd
+          def normalize_headers_csv(path: Path, rename_map: dict[str,str]) -> bool:
+              if not path.exists(): return False
+              df = pd.read_csv(path)
+              df = df.rename(columns=rename_map)
+              df.to_csv(path, index=False)
+              return True
+          PY
+
+          cat > utils/webhooks.py <<'PY'
+          from dataclasses import dataclass, asdict
+          from typing import Dict, Any
+          import json
+          @dataclass
+          class Event:
+              name: str
+              payload: Dict[str, Any]
+          def compile_event(name: str, payload: Dict[str, Any]) -> str:
+              evt = Event(name=name, payload=payload)
+              return json.dumps(asdict(evt), indent=2)
+          PY
+
+          cat > utils/shared.py <<'PY'
+          from .io import (
+              SCHEMA_MATERIALS as MATERIALS, SCHEMA_PROCESSES as PROCESSES,
+              SCHEMA_BOM as BOM, SCHEMA_QUOTES as QUOTES,
+              paths, _read_csv as read_csv_safe,
+              load_materials, load_processes, load_bom, load_quotes
+          )
+          SCHEMAS={"MATERIALS":MATERIALS,"PROCESSES":PROCESSES,"BOM":BOM,"QUOTES":QUOTES}
+          __all__=["MATERIALS","PROCESSES","BOM","QUOTES","paths","read_csv_safe",
+                   "load_materials","load_processes","load_bom","load_quotes","SCHEMAS"]
+          PY
+
+      - name: Data samples
+        run: |
+          echo "material_id,description,price_eur_per_kg\nAL6061,Aluminium 6061,4.5\nS235,Staal S235,1.1" > data/materials_db.csv
+          echo "process_id,machine_rate_eur_h,labor_rate_eur_h,overhead_pct,margin_pct\nMILLING_CNC_3AX,80,45,0.2,0.1\nTURNING_CNC,70,45,0.2,0.1" > data/processes_db.csv
+          echo "line_id,material_id,qty,mass_kg,process_route,runtime_h\nL1,AL6061,10,2.4,MILLING_CNC_3AX,0.4\nL2,S235,6,5.0,TURNING_CNC,0.35" > data/bom_template.csv
+          echo "supplier,material_id,price_eur_per_kg,lead_time_days,valid_until,preferred\nMetals4U,AL6061,4.4,7,2025-12-31,1\nSteelCo,S235,1.05,10,2025-11-15,1" > data/supplier_quotes.csv
+
+      - name: Templates
+        run: |
+          cat > templates/offerte_v1.md.j2 <<'TPL'
+          # Offerte {{ project_name }}
+          **Totaal (EUR):** {{ total | round(2) }}
+          {% for r in rows %}
+          - {{ r.line_id }} — {{ r.material_id }} — € {{ r.total_cost | round(2) }}
+          {% endfor %}
+          TPL
+
+      - name: Pages (core + legacy)
+        run: |
+          # Kern
+          cat > pages/01_Quick_Cost.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import load_materials, load_processes, load_bom, load_quotes
+          from utils.quotes import apply_best_quotes
+          from utils.pricing import compute_costs
+          def main():
+              st.title("💸 Quick Cost (beste quotes)")
+              mats=load_materials(); procs=load_processes(); bom=load_bom(); quotes=load_quotes()
+              df=compute_costs(apply_best_quotes(mats,quotes),procs,bom)
+              st.dataframe(df[["line_id","material_id","qty","material_cost","process_cost","overhead","margin","total_cost"]])
+              st.metric("Totaal", f"EUR {df['total_cost'].sum():,.2f}")
+          guard(main)
+          PY
+
+          cat > pages/05_Data_Quality.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st, pandas as pd
+          from utils.io import load_materials, load_processes, load_bom
+          def neg(df, cols): return [c for c in cols if c in df.columns and (pd.to_numeric(df[c],errors="coerce")<0).any()]
+          def miss(df, cols): return [c for c in cols if c not in df.columns]
+          def main():
+              st.title("🧪 Data Quality")
+              mats=load_materials(); procs=load_processes(); bom=load_bom()
+              m1=miss(mats,["material_id","price_eur_per_kg"]); m2=neg(mats,["price_eur_per_kg"])
+              p1=miss(procs,["process_id","machine_rate_eur_h","labor_rate_eur_h","overhead_pct","margin_pct"])
+              p2=neg(procs,["machine_rate_eur_h","labor_rate_eur_h","overhead_pct","margin_pct"])
+              b1=miss(bom,["line_id","material_id","qty","mass_kg","process_route","runtime_h"])
+              b2=neg(bom,["qty","mass_kg","runtime_h"])
+              if any([m1,m2,p1,p2,b1,b2]):
+                  if m1: st.error(f"materials miss: {m1}")
+                  if m2: st.error(f"materials neg: {m2}")
+                  if p1: st.error(f"processes miss: {p1}")
+                  if p2: st.error(f"processes neg: {p2}")
+                  if b1: st.error(f"bom miss: {b1}")
+                  if b2: st.error(f"bom neg: {b2}")
+              else:
+                  st.success("Alle basischecks OK")
+          guard(main)
+          PY
+
+          cat > pages/06_Scenario_Planner.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import load_materials, load_processes, load_bom
+          from utils.pricing import compute_costs
+          def main():
+              st.title("🧭 Scenario Planner")
+              mats=load_materials().copy(); procs=load_processes().copy(); bom=load_bom().copy()
+              mat_delta=st.sidebar.slider("Materiaalprijs ± %",-50,50,0,5)
+              labor_delta=st.sidebar.slider("Arbeidsloon ± %",-50,50,0,5)
+              margin_delta=st.sidebar.slider("Marge ± %-punten",-20,20,0,1)
+              mats["price_eur_per_kg"]*=(1+mat_delta/100.0)
+              procs["labor_rate_eur_h"]*=(1+labor_delta/100.0)
+              procs["margin_pct"]+=margin_delta/100.0
+              df=compute_costs(mats,procs,bom)
+              st.metric("Nieuw totaal (EUR)", f"{df['total_cost'].sum():,.2f}")
+              st.dataframe(df[["line_id","material_id","material_cost","process_cost","overhead","margin","total_cost"]])
+          guard(main)
+          PY
+
+          cat > pages/07_Supplier_Quotes.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import load_quotes, load_materials
+          from utils.quotes import best_quotes, join_with_materials
+          def main():
+              st.title("🤝 Supplier Quotes")
+              quotes=load_quotes(); mats=load_materials()
+              best=best_quotes(quotes)
+              st.subheader("Beste quotes per materiaal"); st.dataframe(best)
+              st.subheader("Materialen verrijkt met beste leverancier"); st.dataframe(join_with_materials(mats,best))
+          guard(main)
+          PY
+
+          cat > pages/18_Offerte_DOCX.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import load_materials, load_processes, load_bom, load_quotes
+          from utils.quotes import apply_best_quotes
+          from utils.pricing import compute_costs
+          from utils.docx_export import make_offer_docx
+          def main():
+              st.title("📄 Offerte DOCX")
+              mats=load_materials(); procs=load_processes(); bom=load_bom(); quotes=load_quotes()
+              df=compute_costs(apply_best_quotes(mats,quotes),procs,bom)
+              st.metric("Totaal", f"EUR {df['total_cost'].sum():,.2f}")
+              st.dataframe(df[["line_id","material_id","qty","material_cost","process_cost","overhead","total_cost"]])
+              st.download_button("Download offerte.docx", make_offer_docx(df), "offerte.docx",
+                                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+          guard(main)
+          PY
+
+          cat > pages/19_Offerte_PDF.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import load_materials, load_processes, load_bom, load_quotes
+          from utils.quotes import apply_best_quotes
+          from utils.pricing import compute_costs
+          from utils.pdf_export import make_offer_pdf
+          def main():
+              st.title("🧾 Offerte PDF")
+              mats=load_materials(); procs=load_processes(); bom=load_bom(); quotes=load_quotes()
+              df=compute_costs(apply_best_quotes(mats,quotes),procs,bom)
+              st.metric("Totaal", f"EUR {df['total_cost'].sum():,.2f}")
+              st.dataframe(df[["line_id","material_id","qty","material_cost","process_cost","overhead","total_cost"]])
+              st.download_button("Download offerte.pdf", make_offer_pdf(df), "offerte.pdf", "application/pdf")
+          guard(main)
+          PY
+
+          cat > pages/20_Download_Center.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import paths
+          def main():
+              st.title("📥 Download Center")
+              p=paths()
+              for label,key in [("Materials template","materials"),("Processes template","processes"),("BOM template","bom"),("Supplier quotes","quotes")]:
+                  f=p[key]
+                  try: st.download_button(f"Download {label}", data=f.read_bytes(), file_name=f.name, mime="text/csv")
+                  except FileNotFoundError: st.warning(f"Bestand ontbreekt: {f}")
+          guard(main)
+          PY
+
+          # Legacy wrappers
+          cat > pages/00_Debug.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st, sys, platform
+          def main():
+              st.title("🪲 Debug"); st.write("Python:", sys.version); st.write("Platform:", platform.platform())
+          guard(main)
+          PY
+
+          cat > pages/0_Diagnose.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import load_materials, load_processes, load_bom, load_quotes
+          def main():
+              st.title("🧬 Diagnose")
+              for name, loader in [("Materials",load_materials),("Processes",load_processes),("BOM",load_bom),("Quotes",load_quotes)]:
+                  st.subheader(name)
+                  try: st.dataframe(loader())
+                  except Exception as e: st.error(f"{name}: {e}")
+          guard(main)
+          PY
+
+          cat > pages/01_Calculatie.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import load_materials, load_processes, load_bom, load_quotes
+          from utils.quotes import apply_best_quotes
+          from utils.pricing import compute_costs
+          def main():
+              st.title("💸 Calculatie (compat)")
+              mats=load_materials(); procs=load_processes(); bom=load_bom(); quotes=load_quotes()
+              df=compute_costs(apply_best_quotes(mats,quotes), procs, bom)
+              st.dataframe(df); st.metric("Totaal (EUR)", f"{df['total_cost'].sum():,.2f}")
+          guard(main)
+          PY
+
+          cat > pages/03_Presets.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.presets import load_presets, save_presets, PricingPreset
+          def main():
+              st.title("⚙️ Presets (Overhead & Marge)")
+              presets = load_presets()
+              names = list(presets.keys())
+              pick = st.selectbox("Preset", names, index=0 if names else None)
+              if pick:
+                  p = presets[pick]
+                  over = st.number_input("Overhead %", value=p.overhead_pct*100, step=1.0)/100.0
+                  marg = st.number_input("Marge %", value=p.margin_pct*100, step=1.0)/100.0
+                  if st.button("Bewaar"):
+                      presets[pick]=PricingPreset(pick, over, marg); save_presets(presets); st.success("Opgeslagen")
+              st.divider(); st.subheader("Nieuwe preset")
+              nm = st.text_input("Naam")
+              over_n=st.number_input("Overhead % (nieuw)",value=20.0)/100.0
+              marg_n=st.number_input("Marge % (nieuw)",value=10.0)/100.0
+              if st.button("Toevoegen") and nm:
+                  presets[nm]=PricingPreset(nm, over_n, marg_n); save_presets(presets); st.success("Preset toegevoegd")
+          guard(main)
+          PY
+
+          cat > pages/04_Materiaalbronnen.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import load_materials, load_quotes
+          from utils.quotes import best_quotes, join_with_materials
+          def main():
+              st.title("🔗 Materiaalbronnen")
+              mats=load_materials(); quotes=load_quotes()
+              st.subheader("Beste quotes"); best=best_quotes(quotes); st.dataframe(best)
+              st.subheader("Materialen + leverancier"); st.dataframe(join_with_materials(mats,best))
+          guard(main)
+          PY
+
+          cat > pages/12_Rapport.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import load_materials, load_processes, load_bom, load_quotes
+          from utils.quotes import apply_best_quotes
+          from utils.pricing import compute_costs
+          def main():
+              st.title("📑 Rapport (Markdown)")
+              mats=load_materials(); procs=load_processes(); bom=load_bom(); quotes=load_quotes()
+              df=compute_costs(apply_best_quotes(mats,quotes), procs, bom)
+              md=["# Offerte-rapport",f"**Totaal (EUR):** {df['total_cost'].sum():,.2f}","",df.to_markdown(index=False)]
+              content="\n".join(md)
+              st.download_button("Download rapport.md", content.encode("utf-8"), "rapport.md", "text/markdown")
+              st.code(content, language="markdown")
+          guard(main)
+          PY
+
+          cat > pages/13_Marktdata.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.market import load_market_csv, yoy_change
+          def main():
+              st.title("📈 Marktdata (simple)")
+              path = st.text_input("CSV-pad", "data/market.csv")
+              df = load_market_csv(path)
+              st.dataframe(df)
+              series = st.text_input("Serie-naam")
+              if series:
+                  yo = yoy_change(df, series)
+                  st.write("YoY:", "n.v.t." if yo is None else f"{yo*100:.2f}%")
+          guard(main)
+          PY
+
+          cat > pages/15_Bom_Import.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st, pandas as pd
+          from pathlib import Path
+          def main():
+              st.title("📥 BOM Import")
+              up = st.file_uploader("Upload BOM CSV", type=["csv"])
+              if up:
+                  df = pd.read_csv(up)
+                  Path("data/bom_template.csv").write_text(df.to_csv(index=False), encoding="utf-8")
+                  st.success("BOM opgeslagen naar data/bom_template.csv")
+                  st.dataframe(df.head())
+          guard(main)
+          PY
+
+          cat > pages/16_Routing_Kosten.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st, pandas as pd
+          from utils.io import load_bom
+          from utils.routing import compute_routing_cost, routing_summary
+          def main():
+              st.title("🛠️ Routing Kosten")
+              st.write("Upload routing.csv met kolommen: process_id,time_h_per_unit,setup_h")
+              up = st.file_uploader("Upload routing.csv", type=["csv"])
+              if up:
+                  routing = pd.read_csv(up)
+                  df = compute_routing_cost(load_bom(), routing)
+                  st.dataframe(df)
+                  st.subheader("Samenvatting")
+                  st.dataframe(routing_summary(df))
+          guard(main)
+          PY
+
+          cat > pages/17_Offerte_Export.py <<'PY'
+          from utils.safe import guard
+          import streamlit as st
+          from utils.io import load_materials, load_processes, load_bom, load_quotes
+          from utils.quotes import apply_best_quotes
+          from utils.pricing import compute_costs
+          from utils.docx_export import make_offer_docx
+          from utils.pdf_export import make_offer_pdf
+          def main():
+              st.title("📦 Offerte Export (DOCX & PDF)")
+              mats=load_materials(); procs=load_processes(); bom=load_bom(); quotes=load_quotes()
+              df=compute_costs(apply_best_quotes(mats,quotes),procs,bom)
+              st.metric("Totaal", f"EUR {df['total_cost'].sum():,.2f}")
+              st.download_button("DOCX", make_offer_docx(df), "offerte.docx")
+              st.download_button("PDF", make_offer_pdf(df), "offerte.pdf", "application/pdf")
+          guard(main)
+          PY
+
+      - name: Commit & push (fallback if main protected)
+        shell: bash
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "ℹ️ Geen wijzigingen."
+            exit 0
+          fi
+          git commit -m "Bootstrap Cost Forge full + legacy pages"
+          if git push origin HEAD:main; then
+            echo "✅ Gecommit naar main."
+          else
+            TS=$(date +%Y%m%d-%H%M%S)
+            BR="bootstrap/${TS}"
+            git branch -f "$BR"
+            git checkout "$BR"
+            git push -u origin "$BR"
+            echo "::notice title=Open Pull Request::https://github.com/${GITHUB_REPOSITORY}/compare/${BR}?expand=1"
+          fi
+
+  smoke:
+    needs: bootstrap
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (latest state)
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ruff lint
+        run: ruff check utils pages home.py --output-format=github
+
+      - name: Quick import test
+        run: |
+          python - <<'PY'
+          import importlib, sys
+          mods = ["utils.safe","utils.io","utils.pricing","utils.quotes","utils.docx_export","utils.pdf_export"]
+          bad=[]
+          for m in mods:
+            try: importlib.import_module(m)
+            except Exception as e: bad.append((m, repr(e)))
+          if bad:
+            for m,e in bad: print(f"[IMPORT FAIL] {m}: {e}")
+            sys.exit(1)
+          print("Imports OK")
+          PY
+
+      - name: CSV schema check
+        run: |
+          python - <<'PY'
+          import sys, pandas as pd
+          from utils.io import (
+            SCHEMA_MATERIALS,SCHEMA_PROCESSES,SCHEMA_BOM,SCHEMA_QUOTES,
+            load_materials,load_processes,load_bom,load_quotes
+          )
+          def check(df, schema, name):
+            missing=[c for c in schema if c not in df.columns]
+            extra=[c for c in df.columns if c not in schema]
+            if missing: print(f"[SCHEMA] {name} ontbreekt: {missing}")
+            if extra: print(f"[SCHEMA] {name} extra kolommen (ok): {extra}")
+            return not missing
+          ok=True
+          ok&=check(load_materials(),SCHEMA_MATERIALS,"materials_db.csv")
+          ok&=check(load_processes(),SCHEMA_PROCESSES,"processes_db.csv")
+          ok&=check(load_bom(),SCHEMA_BOM,"bom_template.csv")
+          ok&=check(load_quotes(),SCHEMA_QUOTES,"supplier_quotes.csv")
+          if not ok: sys.exit(1)
+          print("Schema OK")
+          PY
+
+      - name: E2E compute + exports
+        run: |
+          mkdir -p artifacts
+          python - <<'PY'
+          from utils.io import load_materials,load_processes,load_bom,load_quotes
+          from utils.quotes import apply_best_quotes
+          from utils.pricing import compute_costs
+          from utils.docx_export import make_offer_docx
+          from utils.pdf_export import make_offer_pdf
+          mats=load_materials(); procs=load_processes(); bom=load_bom(); quotes=load_quotes()
+          df=compute_costs(apply_best_quotes(mats,quotes),procs,bom)
+          assert "total_cost" in df.columns and len(df)>=1
+          open("artifacts/offerte.docx","wb").write(make_offer_docx(df))
+          open("artifacts/offerte.pdf","wb").write(make_offer_pdf(df))
+          print("TOTAL:", float(df["total_cost"].sum()))
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: offer-exports
+          path: artifacts/
